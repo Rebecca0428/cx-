@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.3
+// @version      1.0.4
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -151,6 +151,7 @@
     const eventInit = {
       bubbles: true,
       cancelable: true,
+      composed: true,
       view: window,
       clientX: x,
       clientY: y,
@@ -163,7 +164,49 @@
     target.dispatchEvent(new EventCtor(type, eventInit));
   }
 
-  function clickEl(el) {
+  function callVueClickHandlers(button) {
+    // Element UI 是 Vue 2 组件，真正的 @click 可能挂在 button.__vue__.$listeners.click。
+    // 普通 DOM click 如果被固定列/遮罩/组件包装挡住，就直接调用 Vue 绑定的 click 回调。
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window });
+    const called = new Set();
+    const callOne = fn => {
+      if (typeof fn !== 'function' || called.has(fn)) return false;
+      called.add(fn);
+      fn.call(button.__vue__?.$parent || button.__vue__ || button, event);
+      return true;
+    };
+
+    let count = 0;
+    const vms = [];
+    let node = button;
+    while (node && vms.length < 8) {
+      if (node.__vue__) vms.push(node.__vue__);
+      node = node.parentElement;
+    }
+
+    for (const vm of vms) {
+      const listeners = [
+        vm.$listeners?.click,
+        vm.$vnode?.data?.on?.click,
+        vm.$options?._parentListeners?.click
+      ];
+      for (const handler of listeners) {
+        if (!handler) continue;
+        if (Array.isArray(handler)) {
+          for (const fn of handler) count += callOne(fn) ? 1 : 0;
+        } else if (Array.isArray(handler.fns)) {
+          for (const fn of handler.fns) count += callOne(fn) ? 1 : 0;
+        } else if (handler.fns) {
+          count += callOne(handler.fns) ? 1 : 0;
+        } else {
+          count += callOne(handler) ? 1 : 0;
+        }
+      }
+    }
+    return count;
+  }
+
+  function clickEl(el, useVueDirect = false) {
     const target = clickableOf(el);
     if (!target) return false;
 
@@ -174,23 +217,29 @@
 
     target.focus?.();
 
-    // Vue / Element UI 的点击监听通常绑在 button 本身；优先点真实 button，避免 elementFromPoint 点到固定列遮罩或子元素。
+    // 1) 原生 DOM 点击。
+    if (target instanceof HTMLButtonElement) {
+      HTMLButtonElement.prototype.click.call(target);
+    } else if (target instanceof HTMLElement) {
+      HTMLElement.prototype.click.call(target);
+    } else {
+      target.click?.();
+    }
     target.click?.();
 
+    // 2) 完整鼠标事件链。
     for (const type of ['pointerover', 'mouseover', 'pointerenter', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
       dispatchMouse(target, type, x, y);
     }
 
-    // 如果坐标处正好是 span/i 子元素，也补一次子元素事件。
-    const pointTarget = document.elementFromPoint(x, y);
-    if (pointTarget && pointTarget !== target && target.contains(pointTarget)) {
-      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-        dispatchMouse(pointTarget, type, x, y);
-      }
+    // 3) 只给“处理”按钮启用 Vue 直调，避免影响后面的单选和确定提交。
+    if (useVueDirect) {
+      callVueClickHandlers(target);
     }
 
     return true;
   }
+
   function findVisibleDialog() {
     return [...document.querySelectorAll('.el-dialog')]
       .find(el => visible(el) && textOf(el).includes('家长回访'));
@@ -357,27 +406,26 @@
   }
 
   async function openProcessDialog(item) {
-    // 有些固定列按钮第一次拿到的不是最终可点击节点；如果点完没有弹窗，就重新定位并重试。
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const button = attempt === 1
-        ? item.button
-        : findProcessButtonForRow(item.row, item.rowIndex) || item.button;
+    // 纯 DOM/Vue 方式点击处理按钮：重新定位真实 button.el-button，并直接调用 Vue click 监听器。
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const button = findProcessButtonForRow(item.row, item.rowIndex) || item.button;
 
       if (!button) break;
-      log(`点击处理按钮：第 ${attempt} 次，按钮文字：${textOf(button)}`);
-      clickEl(button);
+      log(`DOM点击处理按钮：第 ${attempt} 次，按钮文字：${textOf(button)}`);
+      clickEl(button, true);
 
       const start = Date.now();
-      while (Date.now() - start < 2500) {
+      while (Date.now() - start < 3000) {
         const dialog = findVisibleDialog();
         if (dialog) return dialog;
         await sleep(100);
       }
-      await sleep(250);
+      await sleep(300);
     }
 
-    throw new Error('已点击“处理”，但没有弹出回访窗口；请确认当前行右侧“处理”按钮是否可手动打开。');
+    throw new Error('已用 DOM/Vue 方式点击“处理”，但没有弹出回访窗口；请确认该行是否能手动打开。');
   }
+
   async function processOne(item) {
     const date = randomRecentDate();
     const times = randomTimes();
