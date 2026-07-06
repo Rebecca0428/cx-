@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.5
+// @version      1.0.6
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -242,7 +242,14 @@
 
   function findVisibleDialog() {
     return [...document.querySelectorAll('.el-dialog')]
-      .find(el => visible(el) && textOf(el).includes('家长回访'));
+      .find(el => {
+        if (!visible(el)) return false;
+        const t = textOf(el);
+        // 支持两种弹窗：家长回访、学员沟通。也兼容只按字段判断的弹窗。
+        return t.includes('家长回访')
+          || t.includes('学员沟通')
+          || (t.includes('沟通日期') && t.includes('反馈状态'));
+      });
   }
 
   function findButtonByText(root, keyword) {
@@ -342,7 +349,7 @@
       if (dialog) return dialog;
       await sleep(100);
     }
-    throw new Error('没有等到“家长回访”弹窗');
+    throw new Error('没有等到回访/沟通弹窗');
   }
 
   async function waitDialogClosed(timeoutMs = 8000) {
@@ -367,17 +374,34 @@
     await setDateTimeByDom(startInput, times.start);
     await setDateTimeByDom(endInput, times.end);
 
-    const placeholders = [
+    // 家长回访弹窗有 4 个内容框；学员沟通弹窗只有 2 个内容框。
+    // 这里按实际存在的输入框填写，不再强制要求 4 个都存在。
+    const textPlaceholders = [
       '请输入学员沟通内容',
       '请输入学员反馈内容',
       '请输入家长回访内容',
       '请输入家长反馈内容'
     ];
 
-    for (const ph of placeholders) {
+    const filledTextInputs = [];
+    for (const ph of textPlaceholders) {
       const el = findInputByPlaceholder(dialog, ph);
-      if (!el) throw new Error(`没有找到文本框：${ph}`);
+      if (!el) continue;
       setNativeValue(el, CONFIG.textValue);
+      filledTextInputs.push([ph, el]);
+    }
+
+    // 兜底：如果页面 placeholder 改了，就填写弹窗里所有可见 textarea。
+    if (!filledTextInputs.length) {
+      const textareas = [...dialog.querySelectorAll('textarea')].filter(visible);
+      for (const el of textareas) {
+        setNativeValue(el, CONFIG.textValue);
+        filledTextInputs.push([el.placeholder || '文本框', el]);
+      }
+    }
+
+    if (!filledTextInputs.length) {
+      throw new Error('没有找到需要填写的内容文本框');
     }
 
     const normalRadioLabel = [...dialog.querySelectorAll('label.el-radio')]
@@ -387,21 +411,23 @@
 
     await sleep(300);
 
-    // 校验一遍，避免没写进去就提交。
+    // 校验一遍，避免没写进去就提交。只校验当前弹窗实际存在的字段。
     const checks = [
       ['选择日期', date],
       ['开始时间', times.start],
-      ['结束时间', times.end],
-      ['请输入学员沟通内容', CONFIG.textValue],
-      ['请输入学员反馈内容', CONFIG.textValue],
-      ['请输入家长回访内容', CONFIG.textValue],
-      ['请输入家长反馈内容', CONFIG.textValue]
+      ['结束时间', times.end]
     ];
 
+    for (const [ph, el] of filledTextInputs) {
+      checks.push([ph, CONFIG.textValue]);
+    }
+
     for (const [ph, expected] of checks) {
-      const el = findInputByPlaceholder(dialog, ph);
+      const el = ['选择日期', '开始时间', '结束时间'].includes(ph)
+        ? findInputByPlaceholder(dialog, ph)
+        : filledTextInputs.find(([name]) => name === ph)?.[1];
       if (!el || el.value !== expected) {
-        throw new Error(`字段校验失败：${ph}，期望 ${expected}，实际 ${el ? el.value : '未找到'}`);
+        throw new Error('字段校验失败：' + ph + '，期望 ' + expected + '，实际 ' + (el ? el.value : '未找到'));
       }
     }
 
