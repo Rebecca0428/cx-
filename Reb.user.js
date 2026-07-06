@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.13
+// @version      1.0.14
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -92,7 +92,25 @@
   }
 
   function getTextValue() {
-    return localStorage.getItem(TEXT_STORAGE_KEY) || CONFIG.textValue;
+    const saved = localStorage.getItem(TEXT_STORAGE_KEY);
+    return saved && saved.trim() ? saved : CONFIG.textValue;
+  }
+
+  function setTextValue(value, silent = false) {
+    const next = String(value || '').trim() || CONFIG.textValue;
+    localStorage.setItem(TEXT_STORAGE_KEY, next);
+    refreshTextPanel();
+    if (!silent) log('已保存填写内容：' + next);
+  }
+
+  function saveTextInputNow(silent = true) {
+    const input = document.querySelector('#followup-auto-text-value');
+    if (!input) return;
+    const next = String(input.value || '').trim() || CONFIG.textValue;
+    localStorage.setItem(TEXT_STORAGE_KEY, next);
+    const label = document.querySelector('#followup-auto-text-label');
+    if (label) label.textContent = next;
+    if (!silent) log('已保存填写内容：' + next);
   }
 
   function detectStudentName(item, dialog) {
@@ -118,14 +136,7 @@
       .replace(/学生/g, student);
   }
 
-  function setTextValue(value) {
-    const next = String(value || '').trim() || CONFIG.textValue;
-    localStorage.setItem(TEXT_STORAGE_KEY, next);
-    refreshTextPanel();
-    log('已保存填写内容：' + next);
-  }
-
-  function isFollowupPage() {
+  function isFollowupPage() {  function isFollowupPage() {
     return location.href.includes('/student/service/FollowUpComm')
       || location.hash.includes('/student/service/FollowUpComm');
   }
@@ -153,7 +164,11 @@
     const input = document.querySelector('#followup-auto-text-value');
     const label = document.querySelector('#followup-auto-text-label');
     const value = getTextValue();
-    if (input && input.value !== value) input.value = value;
+
+    // 输入框正在编辑时，不要每秒用旧值覆盖用户正在输入的文字。
+    if (input && document.activeElement !== input && input.value !== value) {
+      input.value = value;
+    }
     if (label) label.textContent = value;
   }
 
@@ -698,6 +713,14 @@
     document.querySelector('#followup-auto-go-page').addEventListener('click', goFollowupPage);
     document.querySelector('#followup-auto-text-save').addEventListener('click', () => {
       setTextValue(document.querySelector('#followup-auto-text-value').value);
+    });
+    document.querySelector('#followup-auto-text-value').addEventListener('input', () => {
+      // 边输入边自动保存，避免忘记点保存。
+      saveTextInputNow(true);
+    });
+    document.querySelector('#followup-auto-text-value').addEventListener('blur', () => {
+      saveTextInputNow(true);
+      refreshTextPanel();
     });
     document.querySelector('#followup-auto-text-value').addEventListener('keydown', event => {
       if (event.key === 'Enter') {
