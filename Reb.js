@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.7
+// @version      1.0.8
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -39,14 +39,69 @@
     // 所有文本框填写内容。
     textValue: '学习情况沟通',
 
-    // 每条提交后等待时间，网络慢可改大。
-    waitAfterSubmitMs: 900
+    // 默认速度模式：fast = 加速模式；stable = 稳定模式。也可以在右下面板里切换。
+    defaultSpeedMode: 'fast'
   };
 
   /**********************
    * 工具函数
    **********************/
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const SPEED_STORAGE_KEY = 'followup-auto-speed-mode';
+  const SPEED_PRESETS = {
+    stable: {
+      label: '稳定模式',
+      dateFocus: 80,
+      dateClear: 30,
+      dateBlur: 120,
+      radio: 300,
+      dialogWait: 3000,
+      retryGap: 250,
+      poll: 100,
+      closePoll: 150,
+      afterRow: 800,
+      afterSubmit: 1800
+    },
+    fast: {
+      label: '加速模式',
+      dateFocus: 35,
+      dateClear: 15,
+      dateBlur: 60,
+      radio: 120,
+      dialogWait: 1200,
+      retryGap: 100,
+      poll: 60,
+      closePoll: 80,
+      afterRow: 250,
+      afterSubmit: 900
+    }
+  };
+
+  function getSpeedMode() {
+    const saved = localStorage.getItem(SPEED_STORAGE_KEY);
+    return SPEED_PRESETS[saved] ? saved : CONFIG.defaultSpeedMode;
+  }
+
+  function setSpeedMode(mode) {
+    if (!SPEED_PRESETS[mode]) return;
+    localStorage.setItem(SPEED_STORAGE_KEY, mode);
+    refreshSpeedPanel();
+    log('已切换为：' + SPEED_PRESETS[mode].label);
+  }
+
+  function speedValue(key) {
+    return SPEED_PRESETS[getSpeedMode()][key];
+  }
+
+  function refreshSpeedPanel() {
+    const mode = getSpeedMode();
+    const label = document.querySelector('#followup-auto-speed-label');
+    const btn = document.querySelector('#followup-auto-speed-toggle');
+    if (label) label.textContent = SPEED_PRESETS[mode].label;
+    if (btn) btn.textContent = mode === 'fast' ? '切换到稳定模式' : '切换到加速模式';
+  }
+
   const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
   const pad = (n) => String(n).padStart(2, '0');
 
@@ -113,10 +168,10 @@
     el.removeAttribute('readonly');
     el.focus();
     el.click();
-    await sleep(35);
+    await sleep(speedValue('dateFocus'));
 
     setNativeValue(el, '');
-    await sleep(15);
+    await sleep(speedValue('dateClear'));
     setNativeValue(el, value);
 
     el.dispatchEvent(new KeyboardEvent('keydown', {
@@ -135,7 +190,7 @@
     }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.blur();
-    await sleep(60);
+    await sleep(speedValue('dateBlur'));
   }
 
   function clickableOf(el) {
@@ -347,7 +402,7 @@
     while (Date.now() - start < timeoutMs) {
       const dialog = findVisibleDialog();
       if (dialog) return dialog;
-      await sleep(60);
+      await sleep(speedValue('poll'));
     }
     throw new Error('没有等到回访/沟通弹窗');
   }
@@ -356,7 +411,7 @@
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (!findVisibleDialog()) return true;
-      await sleep(80);
+      await sleep(speedValue('closePoll'));
     }
     return false;
   }
@@ -409,7 +464,7 @@
     if (!normalRadioLabel) throw new Error('没有找到“正常”反馈状态');
     clickEl(normalRadioLabel);
 
-    await sleep(120);
+    await sleep(speedValue('radio'));
 
     // 校验一遍，避免没写进去就提交。只校验当前弹窗实际存在的字段。
     const checks = [
@@ -448,12 +503,12 @@
       clickEl(button, true);
 
       const start = Date.now();
-      while (Date.now() - start < 1200) {
+      while (Date.now() - start < speedValue('dialogWait')) {
         const dialog = findVisibleDialog();
         if (dialog) return dialog;
-        await sleep(60);
+        await sleep(speedValue('poll'));
       }
-      await sleep(120);
+      await sleep(speedValue('retryGap'));
     }
 
     throw new Error('已找到右侧蓝色“处理”按钮并尝试点击，但没有弹出回访窗口；请确认该行是否能手动打开。');
@@ -465,7 +520,7 @@
 
     log(`开始处理：${item.student || item.id}，日期 ${date}，时间 ${times.start}-${times.end}`);
     const dialog = await openProcessDialog(item);
-    await sleep(120);
+    await sleep(speedValue('radio'));
     await fillDialog(dialog, date, times);
 
     if (!CONFIG.autoSubmit) {
@@ -477,7 +532,7 @@
     if (!submit) throw new Error('没有找到“确定”按钮');
     clickEl(submit);
 
-    await sleep(CONFIG.waitAfterSubmitMs);
+    await sleep(speedValue('afterSubmit'));
     const closed = await waitDialogClosed();
     if (!closed) throw new Error('提交后弹窗没有关闭，可能保存失败');
 
@@ -500,7 +555,7 @@
 
         await processOne(rows[0]);
         done++;
-        await sleep(250);
+        await sleep(speedValue('afterRow'));
       }
       log(`本次完成 ${done} 条。`);
     } catch (err) {
@@ -542,7 +597,8 @@
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
         <div>内容：${CONFIG.textValue}</div>
         <div>提交：${CONFIG.autoSubmit ? '自动提交' : '只填写不提交'}</div>
-        <div>速度：加速模式</div>
+        <div>速度：<span id="followup-auto-speed-label"></span></div>
+        <button id="followup-auto-speed-toggle" style="margin-top:6px;width:100%;height:30px;border:1px solid #409EFF;border-radius:6px;background:white;color:#409EFF;cursor:pointer;font-weight:bold;"></button>
         <button id="followup-auto-start" style="margin-top:8px;width:100%;height:34px;border:0;border-radius:6px;background:#409EFF;color:white;cursor:pointer;font-weight:bold;">
           开始处理当前页
         </button>
@@ -552,6 +608,10 @@
 
     document.body.appendChild(panel);
     document.querySelector('#followup-auto-start').addEventListener('click', run);
+    document.querySelector('#followup-auto-speed-toggle').addEventListener('click', () => {
+      setSpeedMode(getSpeedMode() === 'fast' ? 'stable' : 'fast');
+    });
+    refreshSpeedPanel();
   }
 
   // 页面是后台系统，路由切换不一定刷新，所以定时确保面板存在。
