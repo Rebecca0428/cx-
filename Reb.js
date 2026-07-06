@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.11
-// @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
-// @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
+// @version      1.0.12
+// @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
+// @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
 // @match        https://crm.chaojixuezhang.com/*
 // @grant        none
