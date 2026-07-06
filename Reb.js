@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.0
+// @version      1.0.1
+// @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
+// @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
 // @match        https://crm.chaojixuezhang.com/*
 // @grant        none
@@ -104,6 +106,38 @@
     el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
+  async function setDateTimeByDom(el, value) {
+    // 专门给 Element UI 的日期/时间输入框用：
+    // 只改 input.value 往往不够，需要模拟真实用户的 DOM 事件链。
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    el.removeAttribute('readonly');
+    el.focus();
+    el.click();
+    await sleep(80);
+
+    setNativeValue(el, '');
+    await sleep(30);
+    setNativeValue(el, value);
+
+    el.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true
+    }));
+    el.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true
+    }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.blur();
+    await sleep(120);
+  }
+
   function clickEl(el) {
     el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -126,13 +160,36 @@
       .find(el => visible(el) && el.placeholder === placeholder);
   }
 
+  function findProcessButtonForRow(row, rowIndex) {
+    // Element UI 的“操作”列如果设置了 fixed="right"，会被渲染到独立的固定列表里，
+    // 不在普通 tbody tr 内；所以不能只在当前 row 里找按钮。
+    const buttonText = el => textOf(el).replace(/\s+/g, '');
+    const isProcessButton = btn => visible(btn) && buttonText(btn).includes('处理');
+
+    const directButton = [...row.querySelectorAll('button, a, span')].find(isProcessButton);
+    if (directButton) return directButton;
+
+    const fixedRows = [...document.querySelectorAll('.el-table__fixed-right tbody tr, .el-table__fixed tbody tr')]
+      .filter(visible);
+    const fixedRow = fixedRows[rowIndex];
+    if (fixedRow) {
+      const fixedButton = [...fixedRow.querySelectorAll('button, a, span')].find(isProcessButton);
+      if (fixedButton) return fixedButton;
+    }
+
+    // 兜底：按当前可见“处理”按钮顺序和普通表格行顺序配对。
+    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button, .el-table__fixed-right a, .el-table__fixed-right span, .el-table__fixed button, .el-table__fixed a, .el-table__fixed span')]
+      .filter(isProcessButton);
+    return allProcessButtons[rowIndex] || null;
+  }
+
   function getPendingRows() {
     const rows = [...document.querySelectorAll('.el-table__body-wrapper tbody tr')]
       .filter(row => visible(row) && textOf(row).includes('待处理'));
-    return rows.map(row => {
+
+    return rows.map((row, rowIndex) => {
       const cells = [...row.querySelectorAll('td')].map(td => textOf(td));
-      const button = [...row.querySelectorAll('button')]
-        .find(btn => visible(btn) && textOf(btn).replace(/\s+/g, '').includes('处理'));
+      const button = findProcessButtonForRow(row, rowIndex);
       return {
         row,
         button,
@@ -172,9 +229,9 @@
       throw new Error('日期或时间输入框没有找到');
     }
 
-    setNativeValue(dateInput, date);
-    setNativeValue(startInput, times.start);
-    setNativeValue(endInput, times.end);
+    await setDateTimeByDom(dateInput, date);
+    await setDateTimeByDom(startInput, times.start);
+    await setDateTimeByDom(endInput, times.end);
 
     const placeholders = [
       '请输入学员沟通内容',
