@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.9
+// @version      1.0.10
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -100,6 +100,30 @@
     localStorage.setItem(TEXT_STORAGE_KEY, next);
     refreshTextPanel();
     log('已保存填写内容：' + next);
+  }
+
+  function isFollowupPage() {
+    return location.href.includes('/student/service/FollowUpComm')
+      || location.hash.includes('/student/service/FollowUpComm');
+  }
+
+  function goFollowupPage() {
+    // 当前系统使用 hash 路由，直接切到学管沟通回访表。
+    location.hash = '/student/service/FollowUpComm';
+    setTimeout(() => {
+      installPanel(true);
+      refreshPageStatusPanel();
+    }, 800);
+  }
+
+  function refreshPageStatusPanel() {
+    const status = document.querySelector('#followup-auto-page-status');
+    const goBtn = document.querySelector('#followup-auto-go-page');
+    const startBtn = document.querySelector('#followup-auto-start');
+    const onPage = isFollowupPage();
+    if (status) status.textContent = onPage ? '当前：回访表页面，可处理' : '当前：不是回访表页面';
+    if (goBtn) goBtn.style.display = onPage ? 'none' : 'block';
+    if (startBtn) startBtn.textContent = onPage ? '开始处理当前页' : '请先前往回访表';
   }
 
   function refreshTextPanel() {
@@ -561,6 +585,12 @@
   }
 
   async function run() {
+    if (!isFollowupPage()) {
+      log('当前不是学管沟通回访表页面，请先点击“前往回访表”。');
+      alert('当前不是学管沟通回访表页面，请先点击面板里的“前往回访表”。');
+      return;
+    }
+
     const startBtn = document.querySelector('#followup-auto-start');
     if (startBtn) startBtn.disabled = true;
 
@@ -587,8 +617,15 @@
     }
   }
 
-  function installPanel() {
-    if (document.querySelector('#followup-auto-panel')) return;
+  function installPanel(forceRefresh = false) {
+    const oldPanel = document.querySelector('#followup-auto-panel');
+    if (oldPanel && !forceRefresh) {
+      refreshPageStatusPanel();
+      refreshTextPanel();
+      refreshSpeedPanel();
+      return;
+    }
+    if (oldPanel) oldPanel.remove();
 
     const panel = document.createElement('div');
     panel.id = 'followup-auto-panel';
@@ -613,6 +650,8 @@
         学管回访自动填写
       </div>
       <div style="padding:10px 12px;line-height:1.7;">
+        <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
+        <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
         <div>内容：<span id="followup-auto-text-label"></span></div>
@@ -630,6 +669,7 @@
 
     document.body.appendChild(panel);
     document.querySelector('#followup-auto-start').addEventListener('click', run);
+    document.querySelector('#followup-auto-go-page').addEventListener('click', goFollowupPage);
     document.querySelector('#followup-auto-text-save').addEventListener('click', () => {
       setTextValue(document.querySelector('#followup-auto-text-value').value);
     });
@@ -644,12 +684,12 @@
     });
     refreshTextPanel();
     refreshSpeedPanel();
+    refreshPageStatusPanel();
   }
 
-  // 页面是后台系统，路由切换不一定刷新，所以定时确保面板存在。
+  // 页面是后台系统，路由切换不一定刷新，所以定时确保面板存在；现在所有 CRM 页面都显示控制台。
   setInterval(() => {
-    if (location.href.includes('/student/service/FollowUpComm')) {
-      installPanel();
-    }
+    installPanel();
+    refreshPageStatusPanel();
   }, 1000);
 })();
