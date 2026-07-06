@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.6
+// @version      1.0.7
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -40,7 +40,7 @@
     textValue: '学习情况沟通',
 
     // 每条提交后等待时间，网络慢可改大。
-    waitAfterSubmitMs: 1800
+    waitAfterSubmitMs: 900
   };
 
   /**********************
@@ -113,10 +113,10 @@
     el.removeAttribute('readonly');
     el.focus();
     el.click();
-    await sleep(80);
+    await sleep(35);
 
     setNativeValue(el, '');
-    await sleep(30);
+    await sleep(15);
     setNativeValue(el, value);
 
     el.dispatchEvent(new KeyboardEvent('keydown', {
@@ -135,7 +135,7 @@
     }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.blur();
-    await sleep(120);
+    await sleep(60);
   }
 
   function clickableOf(el) {
@@ -347,7 +347,7 @@
     while (Date.now() - start < timeoutMs) {
       const dialog = findVisibleDialog();
       if (dialog) return dialog;
-      await sleep(100);
+      await sleep(60);
     }
     throw new Error('没有等到回访/沟通弹窗');
   }
@@ -356,7 +356,7 @@
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (!findVisibleDialog()) return true;
-      await sleep(150);
+      await sleep(80);
     }
     return false;
   }
@@ -409,7 +409,7 @@
     if (!normalRadioLabel) throw new Error('没有找到“正常”反馈状态');
     clickEl(normalRadioLabel);
 
-    await sleep(300);
+    await sleep(120);
 
     // 校验一遍，避免没写进去就提交。只校验当前弹窗实际存在的字段。
     const checks = [
@@ -448,12 +448,12 @@
       clickEl(button, true);
 
       const start = Date.now();
-      while (Date.now() - start < 3000) {
+      while (Date.now() - start < 1200) {
         const dialog = findVisibleDialog();
         if (dialog) return dialog;
-        await sleep(100);
+        await sleep(60);
       }
-      await sleep(300);
+      await sleep(120);
     }
 
     throw new Error('已找到右侧蓝色“处理”按钮并尝试点击，但没有弹出回访窗口；请确认该行是否能手动打开。');
@@ -465,7 +465,7 @@
 
     log(`开始处理：${item.student || item.id}，日期 ${date}，时间 ${times.start}-${times.end}`);
     const dialog = await openProcessDialog(item);
-    await sleep(300);
+    await sleep(120);
     await fillDialog(dialog, date, times);
 
     if (!CONFIG.autoSubmit) {
@@ -500,7 +500,7 @@
 
         await processOne(rows[0]);
         done++;
-        await sleep(800);
+        await sleep(250);
       }
       log(`本次完成 ${done} 条。`);
     } catch (err) {
@@ -542,6 +542,7 @@
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
         <div>内容：${CONFIG.textValue}</div>
         <div>提交：${CONFIG.autoSubmit ? '自动提交' : '只填写不提交'}</div>
+        <div>速度：加速模式</div>
         <button id="followup-auto-start" style="margin-top:8px;width:100%;height:34px;border:0;border-radius:6px;background:#409EFF;color:white;cursor:pointer;font-weight:bold;">
           开始处理当前页
         </button>
