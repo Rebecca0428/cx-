@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.2
+// @version      1.0.3
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -140,7 +140,7 @@
 
   function clickableOf(el) {
     if (!el) return null;
-    const clickable = el.closest?.('button, a, [role="button"], .el-button, [class*="button"]');
+    const clickable = el.closest?.('button.el-button, button, a, [role="button"], .el-button');
     if (clickable && visible(clickable) && !clickable.disabled && !clickable.classList.contains('is-disabled')) {
       return clickable;
     }
@@ -154,6 +154,8 @@
       view: window,
       clientX: x,
       clientY: y,
+      screenX: window.screenX + x,
+      screenY: window.screenY + y,
       button: 0,
       buttons: type === 'mousedown' || type === 'pointerdown' ? 1 : 0
     };
@@ -170,14 +172,23 @@
     const x = Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
     const y = Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
 
-    // 固定列/浮层场景下，真正位于坐标上的元素才是浏览器实际会点到的元素。
-    const realTarget = clickableOf(document.elementFromPoint(x, y)) || target;
+    target.focus?.();
 
-    realTarget.focus?.();
-    for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-      dispatchMouse(realTarget, type, x, y);
+    // Vue / Element UI 的点击监听通常绑在 button 本身；优先点真实 button，避免 elementFromPoint 点到固定列遮罩或子元素。
+    target.click?.();
+
+    for (const type of ['pointerover', 'mouseover', 'pointerenter', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      dispatchMouse(target, type, x, y);
     }
-    realTarget.click?.();
+
+    // 如果坐标处正好是 span/i 子元素，也补一次子元素事件。
+    const pointTarget = document.elementFromPoint(x, y);
+    if (pointTarget && pointTarget !== target && target.contains(pointTarget)) {
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        dispatchMouse(pointTarget, type, x, y);
+      }
+    }
+
     return true;
   }
   function findVisibleDialog() {
@@ -196,12 +207,12 @@
   }
 
   function findProcessButtonForRow(row, rowIndex) {
-    // Element UI 的“操作”列如果设置了 fixed="right"，会被渲染到独立的固定列表里，
-    // 不在普通 tbody tr 内。这里按行的垂直位置去固定列找对应“处理”按钮，避免点错行或点到不可点击元素。
-    const buttonText = el => textOf(el).replace(/\s+/g, '');
-    const isProcessButton = el => visible(el) && buttonText(el).includes('处理');
+    // “处理”按钮真实 DOM 是 button.el-button，里面的 span 文字可能是“处 理”。
+    // 所以统一去掉所有空白后匹配，并直接返回 button，避免只点到 span/i 或固定列副本。
+    const normalize = value => String(value || '').replace(/\s+/g, '');
+    const isProcessButton = el => visible(el) && normalize(textOf(el)).includes('处理');
     const pickButton = root => {
-      const candidates = [...root.querySelectorAll('button, a, [role="button"], .el-button, span')]
+      const candidates = [...root.querySelectorAll('button.el-button, button, a, [role="button"], .el-button, span')]
         .filter(isProcessButton);
       return candidates.map(clickableOf).find(Boolean) || null;
     };
@@ -214,14 +225,14 @@
     const fixedRows = [...document.querySelectorAll('.el-table__fixed-right tbody tr, .el-table__fixed tbody tr')]
       .filter(visible);
 
-    // 优先找和当前普通表格行在同一水平线上的固定列行。
+    // 优先按当前主表格行的垂直位置，找右侧固定列同一行的 button。
     const sameLineRows = fixedRows
       .map(fixedRow => {
         const rect = fixedRow.getBoundingClientRect();
         const centerY = rect.top + rect.height / 2;
         return { fixedRow, distance: Math.abs(centerY - rowCenterY), rect };
       })
-      .filter(item => rowCenterY >= item.rect.top - 3 && rowCenterY <= item.rect.bottom + 3)
+      .filter(item => rowCenterY >= item.rect.top - 4 && rowCenterY <= item.rect.bottom + 4)
       .sort((a, b) => a.distance - b.distance);
 
     for (const item of sameLineRows) {
@@ -229,15 +240,13 @@
       if (btn) return btn;
     }
 
-    // 兜底：按主表格的真实行号配对，而不是按“待处理行”的序号配对。
     const fixedRow = fixedRows[rowIndex];
     if (fixedRow) {
       const btn = pickButton(fixedRow);
       if (btn) return btn;
     }
 
-    // 最后兜底：在所有可见“处理”按钮中找垂直距离最近的。
-    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button, .el-table__fixed-right a, .el-table__fixed-right [role="button"], .el-table__fixed-right .el-button, .el-table__fixed-right span, .el-table__fixed button, .el-table__fixed a, .el-table__fixed [role="button"], .el-table__fixed .el-button, .el-table__fixed span')]
+    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button.el-button, .el-table__fixed-right button, .el-table__fixed-right a, .el-table__fixed-right [role="button"], .el-table__fixed-right .el-button, .el-table__fixed button.el-button, .el-table__fixed button, .el-table__fixed a, .el-table__fixed [role="button"], .el-table__fixed .el-button')]
       .filter(isProcessButton)
       .map(clickableOf)
       .filter(Boolean)
@@ -249,7 +258,6 @@
 
     return allProcessButtons[0]?.btn || null;
   }
-
   function getPendingRows() {
     const allRows = [...document.querySelectorAll('.el-table__body-wrapper tbody tr')]
       .filter(row => visible(row) && !row.closest('.el-table__fixed, .el-table__fixed-right'));
@@ -356,7 +364,7 @@
         : findProcessButtonForRow(item.row, item.rowIndex) || item.button;
 
       if (!button) break;
-      log(`点击处理按钮：第 ${attempt} 次`);
+      log(`点击处理按钮：第 ${attempt} 次，按钮文字：${textOf(button)}`);
       clickEl(button);
 
       const start = Date.now();
