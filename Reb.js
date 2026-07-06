@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.4
+// @version      1.0.5
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -256,16 +256,21 @@
   }
 
   function findProcessButtonForRow(row, rowIndex) {
-    // “处理”按钮真实 DOM 是 button.el-button，里面的 span 文字可能是“处 理”。
-    // 所以统一去掉所有空白后匹配，并直接返回 button，避免只点到 span/i 或固定列副本。
+    // 只找右侧操作列里的蓝色“处 理”真实按钮。
+    // 注意：中间“处理状态”列是“待处理”，不能用 includes('处理')，必须精确等于“处理”。
     const normalize = value => String(value || '').replace(/\s+/g, '');
-    const isProcessButton = el => visible(el) && normalize(textOf(el)).includes('处理');
+    const isProcessButton = el => {
+      if (!visible(el)) return false;
+      if (!el.matches?.('button.el-button, button')) return false;
+      return normalize(textOf(el)) === '处理';
+    };
     const pickButton = root => {
-      const candidates = [...root.querySelectorAll('button.el-button, button, a, [role="button"], .el-button, span')]
+      const candidates = [...root.querySelectorAll('button.el-button, button')]
         .filter(isProcessButton);
       return candidates.map(clickableOf).find(Boolean) || null;
     };
 
+    // 普通主表格行一般没有操作按钮；如果有，也必须是真 button 且文字精确为“处理”。
     const directButton = pickButton(row);
     if (directButton) return directButton;
 
@@ -274,7 +279,7 @@
     const fixedRows = [...document.querySelectorAll('.el-table__fixed-right tbody tr, .el-table__fixed tbody tr')]
       .filter(visible);
 
-    // 优先按当前主表格行的垂直位置，找右侧固定列同一行的 button。
+    // 优先按同一水平线找右侧固定操作列的真实 button。
     const sameLineRows = fixedRows
       .map(fixedRow => {
         const rect = fixedRow.getBoundingClientRect();
@@ -289,13 +294,15 @@
       if (btn) return btn;
     }
 
+    // 兜底：按主表格行号配对固定列行。
     const fixedRow = fixedRows[rowIndex];
     if (fixedRow) {
       const btn = pickButton(fixedRow);
       if (btn) return btn;
     }
 
-    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button.el-button, .el-table__fixed-right button, .el-table__fixed-right a, .el-table__fixed-right [role="button"], .el-table__fixed-right .el-button, .el-table__fixed button.el-button, .el-table__fixed button, .el-table__fixed a, .el-table__fixed [role="button"], .el-table__fixed .el-button')]
+    // 最后兜底：只在固定操作列所有真实 button 中找垂直距离最近且文字精确等于“处理”的按钮。
+    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button.el-button, .el-table__fixed-right button, .el-table__fixed button.el-button, .el-table__fixed button')]
       .filter(isProcessButton)
       .map(clickableOf)
       .filter(Boolean)
@@ -423,7 +430,7 @@
       await sleep(300);
     }
 
-    throw new Error('已用 DOM/Vue 方式点击“处理”，但没有弹出回访窗口；请确认该行是否能手动打开。');
+    throw new Error('已找到右侧蓝色“处理”按钮并尝试点击，但没有弹出回访窗口；请确认该行是否能手动打开。');
   }
 
   async function processOne(item) {
