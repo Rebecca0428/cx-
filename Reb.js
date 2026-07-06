@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.1
+// @version      1.0.2
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -138,13 +138,48 @@
     await sleep(120);
   }
 
-  function clickEl(el) {
-    el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    el.click();
+  function clickableOf(el) {
+    if (!el) return null;
+    const clickable = el.closest?.('button, a, [role="button"], .el-button, [class*="button"]');
+    if (clickable && visible(clickable) && !clickable.disabled && !clickable.classList.contains('is-disabled')) {
+      return clickable;
+    }
+    return el;
   }
 
+  function dispatchMouse(target, type, x, y) {
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === 'mousedown' || type === 'pointerdown' ? 1 : 0
+    };
+    const EventCtor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
+    target.dispatchEvent(new EventCtor(type, eventInit));
+  }
+
+  function clickEl(el) {
+    const target = clickableOf(el);
+    if (!target) return false;
+
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = target.getBoundingClientRect();
+    const x = Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+    const y = Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+
+    // 固定列/浮层场景下，真正位于坐标上的元素才是浏览器实际会点到的元素。
+    const realTarget = clickableOf(document.elementFromPoint(x, y)) || target;
+
+    realTarget.focus?.();
+    for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      dispatchMouse(realTarget, type, x, y);
+    }
+    realTarget.click?.();
+    return true;
+  }
   function findVisibleDialog() {
     return [...document.querySelectorAll('.el-dialog')]
       .find(el => visible(el) && textOf(el).includes('家长回访'));
@@ -162,36 +197,72 @@
 
   function findProcessButtonForRow(row, rowIndex) {
     // Element UI 的“操作”列如果设置了 fixed="right"，会被渲染到独立的固定列表里，
-    // 不在普通 tbody tr 内；所以不能只在当前 row 里找按钮。
+    // 不在普通 tbody tr 内。这里按行的垂直位置去固定列找对应“处理”按钮，避免点错行或点到不可点击元素。
     const buttonText = el => textOf(el).replace(/\s+/g, '');
-    const isProcessButton = btn => visible(btn) && buttonText(btn).includes('处理');
+    const isProcessButton = el => visible(el) && buttonText(el).includes('处理');
+    const pickButton = root => {
+      const candidates = [...root.querySelectorAll('button, a, [role="button"], .el-button, span')]
+        .filter(isProcessButton);
+      return candidates.map(clickableOf).find(Boolean) || null;
+    };
 
-    const directButton = [...row.querySelectorAll('button, a, span')].find(isProcessButton);
+    const directButton = pickButton(row);
     if (directButton) return directButton;
 
+    const rowRect = row.getBoundingClientRect();
+    const rowCenterY = rowRect.top + rowRect.height / 2;
     const fixedRows = [...document.querySelectorAll('.el-table__fixed-right tbody tr, .el-table__fixed tbody tr')]
       .filter(visible);
-    const fixedRow = fixedRows[rowIndex];
-    if (fixedRow) {
-      const fixedButton = [...fixedRow.querySelectorAll('button, a, span')].find(isProcessButton);
-      if (fixedButton) return fixedButton;
+
+    // 优先找和当前普通表格行在同一水平线上的固定列行。
+    const sameLineRows = fixedRows
+      .map(fixedRow => {
+        const rect = fixedRow.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        return { fixedRow, distance: Math.abs(centerY - rowCenterY), rect };
+      })
+      .filter(item => rowCenterY >= item.rect.top - 3 && rowCenterY <= item.rect.bottom + 3)
+      .sort((a, b) => a.distance - b.distance);
+
+    for (const item of sameLineRows) {
+      const btn = pickButton(item.fixedRow);
+      if (btn) return btn;
     }
 
-    // 兜底：按当前可见“处理”按钮顺序和普通表格行顺序配对。
-    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button, .el-table__fixed-right a, .el-table__fixed-right span, .el-table__fixed button, .el-table__fixed a, .el-table__fixed span')]
-      .filter(isProcessButton);
-    return allProcessButtons[rowIndex] || null;
+    // 兜底：按主表格的真实行号配对，而不是按“待处理行”的序号配对。
+    const fixedRow = fixedRows[rowIndex];
+    if (fixedRow) {
+      const btn = pickButton(fixedRow);
+      if (btn) return btn;
+    }
+
+    // 最后兜底：在所有可见“处理”按钮中找垂直距离最近的。
+    const allProcessButtons = [...document.querySelectorAll('.el-table__fixed-right button, .el-table__fixed-right a, .el-table__fixed-right [role="button"], .el-table__fixed-right .el-button, .el-table__fixed-right span, .el-table__fixed button, .el-table__fixed a, .el-table__fixed [role="button"], .el-table__fixed .el-button, .el-table__fixed span')]
+      .filter(isProcessButton)
+      .map(clickableOf)
+      .filter(Boolean)
+      .map(btn => {
+        const rect = btn.getBoundingClientRect();
+        return { btn, distance: Math.abs(rect.top + rect.height / 2 - rowCenterY) };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+    return allProcessButtons[0]?.btn || null;
   }
 
   function getPendingRows() {
-    const rows = [...document.querySelectorAll('.el-table__body-wrapper tbody tr')]
-      .filter(row => visible(row) && textOf(row).includes('待处理'));
+    const allRows = [...document.querySelectorAll('.el-table__body-wrapper tbody tr')]
+      .filter(row => visible(row) && !row.closest('.el-table__fixed, .el-table__fixed-right'));
+    const rows = allRows
+      .map((row, rowIndex) => ({ row, rowIndex }))
+      .filter(item => textOf(item.row).includes('待处理'));
 
-    return rows.map((row, rowIndex) => {
+    return rows.map(({ row, rowIndex }) => {
       const cells = [...row.querySelectorAll('td')].map(td => textOf(td));
       const button = findProcessButtonForRow(row, rowIndex);
       return {
         row,
+        rowIndex,
         button,
         id: cells[0] || '',
         student: cells[2] || '',
@@ -200,7 +271,6 @@
       };
     }).filter(item => item.button);
   }
-
   async function waitForDialog(timeoutMs = 5000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -278,14 +348,34 @@
     }
   }
 
+  async function openProcessDialog(item) {
+    // 有些固定列按钮第一次拿到的不是最终可点击节点；如果点完没有弹窗，就重新定位并重试。
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const button = attempt === 1
+        ? item.button
+        : findProcessButtonForRow(item.row, item.rowIndex) || item.button;
+
+      if (!button) break;
+      log(`点击处理按钮：第 ${attempt} 次`);
+      clickEl(button);
+
+      const start = Date.now();
+      while (Date.now() - start < 2500) {
+        const dialog = findVisibleDialog();
+        if (dialog) return dialog;
+        await sleep(100);
+      }
+      await sleep(250);
+    }
+
+    throw new Error('已点击“处理”，但没有弹出回访窗口；请确认当前行右侧“处理”按钮是否可手动打开。');
+  }
   async function processOne(item) {
     const date = randomRecentDate();
     const times = randomTimes();
 
     log(`开始处理：${item.student || item.id}，日期 ${date}，时间 ${times.start}-${times.end}`);
-    clickEl(item.button);
-
-    const dialog = await waitForDialog();
+    const dialog = await openProcessDialog(item);
     await sleep(300);
     await fillDialog(dialog, date, times);
 
