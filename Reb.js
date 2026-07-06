@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.8
+// @version      1.0.9
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -49,6 +49,7 @@
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   const SPEED_STORAGE_KEY = 'followup-auto-speed-mode';
+  const TEXT_STORAGE_KEY = 'followup-auto-text-value';
   const SPEED_PRESETS = {
     stable: {
       label: '稳定模式',
@@ -88,6 +89,25 @@
     localStorage.setItem(SPEED_STORAGE_KEY, mode);
     refreshSpeedPanel();
     log('已切换为：' + SPEED_PRESETS[mode].label);
+  }
+
+  function getTextValue() {
+    return localStorage.getItem(TEXT_STORAGE_KEY) || CONFIG.textValue;
+  }
+
+  function setTextValue(value) {
+    const next = String(value || '').trim() || CONFIG.textValue;
+    localStorage.setItem(TEXT_STORAGE_KEY, next);
+    refreshTextPanel();
+    log('已保存填写内容：' + next);
+  }
+
+  function refreshTextPanel() {
+    const input = document.querySelector('#followup-auto-text-value');
+    const label = document.querySelector('#followup-auto-text-label');
+    const value = getTextValue();
+    if (input && input.value !== value) input.value = value;
+    if (label) label.textContent = value;
   }
 
   function speedValue(key) {
@@ -442,7 +462,7 @@
     for (const ph of textPlaceholders) {
       const el = findInputByPlaceholder(dialog, ph);
       if (!el) continue;
-      setNativeValue(el, CONFIG.textValue);
+      setNativeValue(el, getTextValue());
       filledTextInputs.push([ph, el]);
     }
 
@@ -450,7 +470,7 @@
     if (!filledTextInputs.length) {
       const textareas = [...dialog.querySelectorAll('textarea')].filter(visible);
       for (const el of textareas) {
-        setNativeValue(el, CONFIG.textValue);
+        setNativeValue(el, getTextValue());
         filledTextInputs.push([el.placeholder || '文本框', el]);
       }
     }
@@ -474,7 +494,7 @@
     ];
 
     for (const [ph, el] of filledTextInputs) {
-      checks.push([ph, CONFIG.textValue]);
+      checks.push([ph, getTextValue()]);
     }
 
     for (const [ph, expected] of checks) {
@@ -595,7 +615,9 @@
       <div style="padding:10px 12px;line-height:1.7;">
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
-        <div>内容：${CONFIG.textValue}</div>
+        <div>内容：<span id="followup-auto-text-label"></span></div>
+        <input id="followup-auto-text-value" style="margin-top:6px;width:100%;height:30px;box-sizing:border-box;border:1px solid #dcdfe6;border-radius:6px;padding:0 8px;" />
+        <button id="followup-auto-text-save" style="margin-top:6px;width:100%;height:30px;border:1px solid #67C23A;border-radius:6px;background:white;color:#67C23A;cursor:pointer;font-weight:bold;">保存填写内容</button>
         <div>提交：${CONFIG.autoSubmit ? '自动提交' : '只填写不提交'}</div>
         <div>速度：<span id="followup-auto-speed-label"></span></div>
         <button id="followup-auto-speed-toggle" style="margin-top:6px;width:100%;height:30px;border:1px solid #409EFF;border-radius:6px;background:white;color:#409EFF;cursor:pointer;font-weight:bold;"></button>
@@ -608,9 +630,19 @@
 
     document.body.appendChild(panel);
     document.querySelector('#followup-auto-start').addEventListener('click', run);
+    document.querySelector('#followup-auto-text-save').addEventListener('click', () => {
+      setTextValue(document.querySelector('#followup-auto-text-value').value);
+    });
+    document.querySelector('#followup-auto-text-value').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        setTextValue(event.target.value);
+      }
+    });
     document.querySelector('#followup-auto-speed-toggle').addEventListener('click', () => {
       setSpeedMode(getSpeedMode() === 'fast' ? 'stable' : 'fast');
     });
+    refreshTextPanel();
     refreshSpeedPanel();
   }
 
