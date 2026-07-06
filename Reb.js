@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.14
+// @version      1.0.15
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -118,7 +118,7 @@
     if (fromRow) return fromRow;
 
     const dialogText = textOf(dialog || document.body);
-    const match = dialogText.match(/学生[:：]s*([^s，,；;]+)/);
+    const match = dialogText.match(/学生[:：]\s*([^\s，,；;]+)/);
     return match ? match[1].trim() : '';
   }
 
@@ -131,12 +131,12 @@
     // 1. 变量写法：{学生}上课认真
     // 2. 普通写法：学生上课认真 —— 会自动把“学生”替换成当前学生姓名
     return template
-      .replace(/{学生}|{学生姓名}|{姓名}|{student}|{name}/gi, student)
+      .replace(/\{学生\}|\{学生姓名\}|\{姓名\}|\{student\}|\{name\}/gi, student)
       .replace(/【学生】|【学生姓名】/g, student)
       .replace(/学生/g, student);
   }
 
-  function isFollowupPage() {  function isFollowupPage() {
+  function isFollowupPage() {
     return location.href.includes('/student/service/FollowUpComm')
       || location.hash.includes('/student/service/FollowUpComm');
   }
