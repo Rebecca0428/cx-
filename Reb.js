@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.12
+// @version      1.0.13
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -107,9 +107,15 @@
   function renderTextValue(item, dialog) {
     const student = detectStudentName(item, dialog);
     const template = getTextValue();
+    if (!student) return template;
+
+    // 支持两种写法：
+    // 1. 变量写法：{学生}上课认真
+    // 2. 普通写法：学生上课认真 —— 会自动把“学生”替换成当前学生姓名
     return template
       .replace(/{学生}|{学生姓名}|{姓名}|{student}|{name}/gi, student)
-      .replace(/【学生】|【学生姓名】/g, student);
+      .replace(/【学生】|【学生姓名】/g, student)
+      .replace(/学生/g, student);
   }
 
   function setTextValue(value) {
@@ -674,8 +680,8 @@
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
         <div>内容：<span id="followup-auto-text-label"></span></div>
-        <input id="followup-auto-text-value" placeholder="例如：{学生}学习情况沟通" style="margin-top:6px;width:100%;height:30px;box-sizing:border-box;border:1px solid #dcdfe6;border-radius:6px;padding:0 8px;" />
-        <div style="font-size:12px;color:#909399;line-height:1.4;">可用变量：{学生} 会自动替换为当前处理学生姓名</div>
+        <input id="followup-auto-text-value" placeholder="例如：学生上课认真，态度端正" style="margin-top:6px;width:100%;height:30px;box-sizing:border-box;border:1px solid #dcdfe6;border-radius:6px;padding:0 8px;" />
+        <div style="font-size:12px;color:#909399;line-height:1.4;">写“学生”或 {学生}，都会自动替换为当前处理学生姓名</div>
         <button id="followup-auto-text-save" style="margin-top:6px;width:100%;height:30px;border:1px solid #67C23A;border-radius:6px;background:white;color:#67C23A;cursor:pointer;font-weight:bold;">保存填写内容</button>
         <div>提交：${CONFIG.autoSubmit ? '自动提交' : '只填写不提交'}</div>
         <div>速度：<span id="followup-auto-speed-label"></span></div>
