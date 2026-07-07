@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.17
+// @version      1.0.18
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -727,30 +727,47 @@
 
   function getVisibleTeacherOptions() {
     return [...document.querySelectorAll('.el-select-dropdown')]
-      .filter(dropdown => visible(dropdown))
+      .filter(dropdown => visible(dropdown) && getComputedStyle(dropdown).display !== 'none')
       .flatMap(dropdown => [...dropdown.querySelectorAll('.el-select-dropdown__item')])
       .filter(item => visible(item)
         && !item.classList.contains('is-disabled')
         && normalizeText(textOf(item)));
   }
 
-  function dispatchOptionMouse(option, type) {
-    const rect = option.getBoundingClientRect();
-    const x = Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
-    const y = Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
-    option.dispatchEvent(new MouseEvent(type, {
+  function fireMouseAt(el, type, x, y) {
+    el.dispatchEvent(new MouseEvent(type, {
       bubbles: true,
       cancelable: true,
+      composed: true,
       view: window,
       clientX: x,
       clientY: y,
+      screenX: window.screenX + x,
+      screenY: window.screenY + y,
       button: 0,
-      buttons: type === 'mousedown' ? 1 : 0
+      buttons: type === 'mousedown' || type === 'pointerdown' ? 1 : 0
     }));
   }
 
+  function clickAtElementCenter(el) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(2, Math.min(window.innerWidth - 2, rect.left + rect.width / 2));
+    const y = Math.max(2, Math.min(window.innerHeight - 2, rect.top + rect.height / 2));
+    const topEl = document.elementFromPoint(x, y) || el;
+    const targets = [...new Set([topEl, topEl.closest?.('.el-select-dropdown__item'), el, el.querySelector('span')].filter(Boolean))];
+
+    for (const target of targets) {
+      target.focus?.();
+      for (const type of ['pointerover', 'mouseover', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        fireMouseAt(target, type, x, y);
+      }
+      target.click?.();
+    }
+  }
+
   function callVueOptionSelect(option) {
-    // Element UI 的 el-option 选中逻辑在 Vue 组件里；直接调用可避免“下拉打开但点不上”。
+    // Element UI 的 el-option 选中逻辑在 Vue 组件里；能拿到就直接调。
     const nodes = [option, ...option.querySelectorAll('*')];
     const vms = nodes.map(node => node.__vue__).filter(Boolean);
     for (const vm of vms) {
@@ -770,65 +787,69 @@
     return false;
   }
 
-  function chooseTeacherOption(option) {
-    option.scrollIntoView({ block: 'center', inline: 'center' });
-    const span = option.querySelector('span') || option;
-
-    // 先走 Element UI / Vue 原生选择方法。
-    const vueSelected = callVueOptionSelect(option);
-
-    // 再补完整 DOM 点击链，兼容没有暴露 Vue 实例的情况。
-    for (const target of [option, span]) {
-      for (const type of ['mouseenter', 'mouseover', 'mousedown', 'mouseup', 'click']) {
-        dispatchOptionMouse(target, type);
-      }
-      target.click?.();
-    }
-    return vueSelected;
-  }
-
   function teacherSelected(selectRoot) {
     const input = selectRoot.matches?.('input') ? selectRoot : selectRoot.querySelector('input');
     const value = String(input?.value || textOf(selectRoot) || '').trim();
     return value && !value.includes('请选择');
   }
 
+  async function openTeacherDropdown(selectRoot) {
+    const selectBox = selectRoot.closest?.('.el-select') || selectRoot;
+    const input = selectBox.querySelector('input') || selectRoot;
+
+    // 必须先 DOM 点击“请选择”这个框本身，再等下拉出现。
+    for (const target of [input, selectBox]) {
+      if (!target) continue;
+      clickAtElementCenter(target);
+      clickEl(target);
+      await sleep(speedValue('radio'));
+      if (getVisibleTeacherOptions().length) return true;
+    }
+    return getVisibleTeacherOptions().length > 0;
+  }
+
+  async function chooseTeacherOption(option, selectRoot) {
+    const name = textOf(option);
+    log('点击老师选项：' + name);
+
+    // 先像真人一样点下拉出来的老师名字中心点。
+    clickAtElementCenter(option);
+    await sleep(speedValue('radio'));
+    if (teacherSelected(selectRoot)) return true;
+
+    // 再补 Element UI / Vue 选择方法。
+    callVueOptionSelect(option);
+    await sleep(speedValue('radio'));
+    if (teacherSelected(selectRoot)) return true;
+
+    // 最后再点一次文字 span。
+    const span = option.querySelector('span') || option;
+    clickAtElementCenter(span);
+    await sleep(speedValue('radio'));
+    return teacherSelected(selectRoot);
+  }
+
   async function selectOneTeacher(selectRoot) {
-    const input = selectRoot.matches?.('input') ? selectRoot : selectRoot.querySelector('input');
-    const clickTarget = selectRoot.closest?.('.el-select') || selectRoot;
+    const selectBox = selectRoot.closest?.('.el-select') || selectRoot;
+    if (teacherSelected(selectBox)) return true;
 
-    if (teacherSelected(clickTarget)) return true;
-
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await openTeacherDropdown(selectBox);
       let options = getVisibleTeacherOptions();
-      if (!options.length) {
-        clickEl(input || clickTarget);
-        await sleep(speedValue('radio'));
-        options = getVisibleTeacherOptions();
-      }
-
-      if (!options.length) {
-        clickEl(clickTarget);
-        await sleep(speedValue('radio'));
-        options = getVisibleTeacherOptions();
-      }
-
       if (!options.length) continue;
 
       const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
-      log('选择老师：' + textOf(option));
-      chooseTeacherOption(option);
-      await sleep(speedValue('radio'));
-
-      if (teacherSelected(clickTarget)) return true;
+      if (await chooseTeacherOption(option, selectBox)) return true;
     }
 
-    return teacherSelected(clickTarget);
+    return teacherSelected(selectBox);
   }
 
   async function selectAllTeachers() {
     const selects = [...document.querySelectorAll('.el-select')]
-      .filter(el => visible(el) && !el.closest('#followup-auto-panel'));
+      .filter(el => visible(el)
+        && !el.closest('#followup-auto-panel')
+        && (textOf(el).includes('请选择') || el.querySelector('input')));
     let done = 0;
     for (const select of selects) {
       if (teacherSelected(select)) {
@@ -836,6 +857,7 @@
         continue;
       }
       if (await selectOneTeacher(select)) done++;
+      else log('老师选择失败：仍然显示“请选择”');
     }
     log('老师选择完成：' + done + ' 个');
   }
