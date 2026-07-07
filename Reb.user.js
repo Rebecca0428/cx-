@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.15
+// @version      1.0.16
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -50,6 +50,7 @@
 
   const SPEED_STORAGE_KEY = 'followup-auto-speed-mode';
   const TEXT_STORAGE_KEY = 'followup-auto-text-value';
+  const PANEL_COLLAPSED_STORAGE_KEY = 'followup-auto-panel-collapsed';
   const SPEED_PRESETS = {
     stable: {
       label: '稳定模式',
@@ -141,6 +142,16 @@
       || location.hash.includes('/student/service/FollowUpComm');
   }
 
+  function isCourseServicePage() {
+    return location.href.includes('/student/service/courseService')
+      || location.hash.includes('/student/service/courseService');
+  }
+
+  function isSatisfactionEditPage() {
+    const t = textOf(document.body);
+    return t.includes('录入学生满意度调查') || t.includes('编辑满意度调查');
+  }
+
   function goFollowupPage() {
     // 当前系统使用 hash 路由，直接切到学管沟通回访表。
     location.hash = '/student/service/FollowUpComm';
@@ -150,14 +161,43 @@
     }, 800);
   }
 
+  function goCourseServicePage() {
+    location.hash = '/student/service/courseService';
+    setTimeout(() => {
+      installPanel(true);
+      refreshPageStatusPanel();
+    }, 800);
+  }
+
+  function getCurrentWorkMode() {
+    if (isFollowupPage()) return 'followup';
+    if (isCourseServicePage() || isSatisfactionEditPage()) return 'satisfaction';
+    return 'other';
+  }
+
   function refreshPageStatusPanel() {
     const status = document.querySelector('#followup-auto-page-status');
     const goBtn = document.querySelector('#followup-auto-go-page');
+    const courseBtn = document.querySelector('#followup-auto-go-course-page');
     const startBtn = document.querySelector('#followup-auto-start');
-    const onPage = isFollowupPage();
-    if (status) status.textContent = onPage ? '当前：回访表页面，可处理' : '当前：不是回访表页面';
-    if (goBtn) goBtn.style.display = onPage ? 'none' : 'block';
-    if (startBtn) startBtn.textContent = onPage ? '开始处理当前页' : '请先前往回访表';
+    const mode = getCurrentWorkMode();
+
+    if (status) {
+      status.textContent = mode === 'followup'
+        ? '当前：回访表页面，可处理'
+        : mode === 'satisfaction'
+          ? '当前：满意度页面，可录入'
+          : '当前：不是可处理页面';
+    }
+    if (goBtn) goBtn.style.display = mode === 'followup' ? 'none' : 'block';
+    if (courseBtn) courseBtn.style.display = mode === 'satisfaction' ? 'none' : 'block';
+    if (startBtn) {
+      startBtn.textContent = mode === 'followup'
+        ? '开始处理回访当前页'
+        : mode === 'satisfaction'
+          ? '开始录入满意度（不提交）'
+          : '请先前往目标页面';
+    }
   }
 
   function refreshTextPanel() {
@@ -170,6 +210,25 @@
       input.value = value;
     }
     if (label) label.textContent = value;
+  }
+
+  function getPanelCollapsed() {
+    return localStorage.getItem(PANEL_COLLAPSED_STORAGE_KEY) === '1';
+  }
+
+  function setPanelCollapsed(collapsed) {
+    localStorage.setItem(PANEL_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+    refreshPanelCollapse();
+  }
+
+  function refreshPanelCollapse() {
+    const panel = document.querySelector('#followup-auto-panel');
+    const body = document.querySelector('#followup-auto-panel-body');
+    const btn = document.querySelector('#followup-auto-collapse-toggle');
+    const collapsed = getPanelCollapsed();
+    if (panel) panel.style.width = collapsed ? '190px' : '310px';
+    if (body) body.style.display = collapsed ? 'none' : 'block';
+    if (btn) btn.textContent = collapsed ? '展开' : '缩小';
   }
 
   function speedValue(key) {
@@ -624,10 +683,122 @@
     return { submitted: true, date, times };
   }
 
+  function normalizeText(value) {
+    return String(value || '').replace(/s+/g, '');
+  }
+
+  function findButtonExact(keyword) {
+    const key = normalizeText(keyword);
+    return [...document.querySelectorAll('button, a, [role="button"], .el-button')]
+      .filter(el => visible(el) && !el.closest('#followup-auto-panel'))
+      .map(clickableOf)
+      .find(el => el && normalizeText(textOf(el)) === key) || null;
+  }
+
+  function findEntryButton() {
+    return findButtonExact('录入') || [...document.querySelectorAll('button, a, span, [role="button"], .el-button')]
+      .filter(el => visible(el) && !el.closest('#followup-auto-panel') && normalizeText(textOf(el)) === '录入')
+      .map(clickableOf)
+      .find(Boolean) || null;
+  }
+
+  async function waitForSatisfactionEditPage(timeoutMs = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (isSatisfactionEditPage()) return true;
+      await sleep(speedValue('poll'));
+    }
+    return false;
+  }
+
+  async function openSatisfactionEntryIfNeeded() {
+    if (isSatisfactionEditPage()) return true;
+
+    const btn = findEntryButton();
+    if (!btn) throw new Error('没有找到“录入”按钮');
+    log('DOM点击录入按钮');
+    clickEl(btn, true);
+
+    const opened = await waitForSatisfactionEditPage();
+    if (!opened) throw new Error('已点击“录入”，但没有进入满意度调查页面');
+    await sleep(speedValue('radio'));
+    return true;
+  }
+
+  async function selectOneTeacher(selectRoot) {
+    const input = selectRoot.matches?.('input') ? selectRoot : selectRoot.querySelector('input');
+    const clickTarget = selectRoot.closest?.('.el-select') || selectRoot;
+    clickEl(input || clickTarget);
+    await sleep(speedValue('radio'));
+
+    const options = [...document.querySelectorAll('.el-select-dropdown:not([style*="display: none"]) .el-select-dropdown__item')]
+      .filter(item => visible(item) && !item.classList.contains('is-disabled') && normalizeText(textOf(item)));
+    if (!options.length) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+      return false;
+    }
+
+    const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
+    clickEl(option);
+    await sleep(speedValue('radio'));
+    return true;
+  }
+
+  async function selectAllTeachers() {
+    const selects = [...document.querySelectorAll('.el-select')]
+      .filter(el => visible(el) && !el.closest('#followup-auto-panel') && textOf(el).includes('请选择'));
+    let done = 0;
+    for (const select of selects) {
+      if (await selectOneTeacher(select)) done++;
+    }
+    log('老师选择完成：' + done + ' 个');
+  }
+
+  function selectAllTenScores() {
+    const labels = [...document.querySelectorAll('label.el-radio')]
+      .filter(label => visible(label) && !label.closest('#followup-auto-panel') && normalizeText(textOf(label)) === '10分');
+    for (const label of labels) {
+      const input = label.querySelector('input[type="radio"]');
+      if (!input || !input.checked) clickEl(label);
+    }
+    log('10分选择完成：' + labels.length + ' 项');
+  }
+
+  function fillAllSatisfactionTextareas() {
+    const textareas = [...document.querySelectorAll('textarea')]
+      .filter(el => visible(el) && !el.closest('#followup-auto-panel'));
+    for (const el of textareas) setNativeValue(el, '无');
+    log('备注填写完成：' + textareas.length + ' 个');
+  }
+
+  async function runSatisfaction() {
+    const startBtn = document.querySelector('#followup-auto-start');
+    if (startBtn) startBtn.disabled = true;
+    try {
+      await openSatisfactionEntryIfNeeded();
+      await selectAllTeachers();
+      selectAllTenScores();
+      fillAllSatisfactionTextareas();
+      log('满意度已自动填写完成：未提交，请人工上传图片后手动点击确认/提交。');
+      alert('满意度已自动填写完成。\\n\\n我没有提交，请你先人工上传图片，然后手动点击确认/提交。');
+    } catch (err) {
+      console.error(err);
+      log('满意度录入停止：' + err.message);
+      alert('满意度录入已停止：\\n' + err.message + '\\n\\n请检查当前页面后再继续。');
+    } finally {
+      if (startBtn) startBtn.disabled = false;
+    }
+  }
+
   async function run() {
-    if (!isFollowupPage()) {
-      log('当前不是学管沟通回访表页面，请先点击“前往回访表”。');
-      alert('当前不是学管沟通回访表页面，请先点击面板里的“前往回访表”。');
+    const mode = getCurrentWorkMode();
+    if (mode === 'satisfaction') {
+      await runSatisfaction();
+      return;
+    }
+    if (mode !== 'followup') {
+      log('当前不是可处理页面，请先前往回访表或课中课程服务表。');
+      alert('当前不是可处理页面，请先点击面板里的目标页面按钮。');
       return;
     }
 
@@ -663,6 +834,7 @@
       refreshPageStatusPanel();
       refreshTextPanel();
       refreshSpeedPanel();
+      refreshPanelCollapse();
       return;
     }
     if (oldPanel) oldPanel.remove();
@@ -686,12 +858,14 @@
     `;
 
     panel.innerHTML = `
-      <div style="background:#409EFF;color:white;padding:9px 12px;font-weight:bold;">
-        学管回访自动填写
+      <div style="background:#409EFF;color:white;padding:9px 12px;font-weight:bold;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span>自动填写控制台</span>
+        <button id="followup-auto-collapse-toggle" style="border:1px solid rgba(255,255,255,.8);background:rgba(255,255,255,.15);color:white;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:12px;"></button>
       </div>
-      <div style="padding:10px 12px;line-height:1.7;">
+      <div id="followup-auto-panel-body" style="padding:10px 12px;line-height:1.7;">
         <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
         <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
+        <button id="followup-auto-go-course-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #7E57C2;border-radius:6px;background:white;color:#7E57C2;cursor:pointer;font-weight:bold;">前往课中课程服务表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
         <div>内容：<span id="followup-auto-text-label"></span></div>
@@ -710,7 +884,9 @@
 
     document.body.appendChild(panel);
     document.querySelector('#followup-auto-start').addEventListener('click', run);
+    document.querySelector('#followup-auto-collapse-toggle').addEventListener('click', () => setPanelCollapsed(!getPanelCollapsed()));
     document.querySelector('#followup-auto-go-page').addEventListener('click', goFollowupPage);
+    document.querySelector('#followup-auto-go-course-page').addEventListener('click', goCourseServicePage);
     document.querySelector('#followup-auto-text-save').addEventListener('click', () => {
       setTextValue(document.querySelector('#followup-auto-text-value').value);
     });
@@ -734,11 +910,13 @@
     refreshTextPanel();
     refreshSpeedPanel();
     refreshPageStatusPanel();
+    refreshPanelCollapse();
   }
 
   // 页面是后台系统，路由切换不一定刷新，所以定时确保面板存在；现在所有 CRM 页面都显示控制台。
   setInterval(() => {
     installPanel();
     refreshPageStatusPanel();
+    refreshPanelCollapse();
   }, 1000);
 })();
