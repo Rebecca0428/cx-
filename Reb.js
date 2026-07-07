@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.18
+// @version      1.0.19
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -725,6 +725,34 @@
     return true;
   }
 
+  function getSelectVm(selectRoot) {
+    const box = selectRoot.closest?.('.el-select') || selectRoot;
+    let node = box;
+    while (node) {
+      const vm = node.__vue__;
+      if (vm && (typeof vm.handleOptionSelect === 'function' || Array.isArray(vm.options) || Array.isArray(vm.cachedOptions))) {
+        return vm;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function getVmOptions(selectVm) {
+    if (!selectVm) return [];
+    const list = [...(selectVm.options || []), ...(selectVm.cachedOptions || [])];
+    const seen = new Set();
+    return list.filter(option => {
+      if (!option || option.disabled) return false;
+      const label = String(option.currentLabel || option.label || option.value || '').trim();
+      const value = option.value;
+      const key = label + '::' + value;
+      if (!label || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function getVisibleTeacherOptions() {
     return [...document.querySelectorAll('.el-select-dropdown')]
       .filter(dropdown => visible(dropdown) && getComputedStyle(dropdown).display !== 'none')
@@ -755,7 +783,7 @@
     const x = Math.max(2, Math.min(window.innerWidth - 2, rect.left + rect.width / 2));
     const y = Math.max(2, Math.min(window.innerHeight - 2, rect.top + rect.height / 2));
     const topEl = document.elementFromPoint(x, y) || el;
-    const targets = [...new Set([topEl, topEl.closest?.('.el-select-dropdown__item'), el, el.querySelector('span')].filter(Boolean))];
+    const targets = [...new Set([topEl, topEl.closest?.('.el-select-dropdown__item'), el, el.querySelector?.('span')].filter(Boolean))];
 
     for (const target of targets) {
       target.focus?.();
@@ -766,65 +794,100 @@
     }
   }
 
-  function callVueOptionSelect(option) {
-    // Element UI 的 el-option 选中逻辑在 Vue 组件里；能拿到就直接调。
-    const nodes = [option, ...option.querySelectorAll('*')];
-    const vms = nodes.map(node => node.__vue__).filter(Boolean);
-    for (const vm of vms) {
-      if (vm.select && typeof vm.select.handleOptionSelect === 'function') {
-        vm.select.handleOptionSelect(vm, true);
-        return true;
-      }
-      let parent = vm.$parent;
-      while (parent) {
-        if (typeof parent.handleOptionSelect === 'function') {
-          parent.handleOptionSelect(vm, true);
-          return true;
-        }
-        parent = parent.$parent;
-      }
-    }
-    return false;
+  function teacherSelected(selectRoot) {
+    const box = selectRoot.closest?.('.el-select') || selectRoot;
+    const input = box.querySelector('input') || (box.matches?.('input') ? box : null);
+    const value = String(input?.value || textOf(box) || '').trim();
+    return value && !value.includes('请选择');
   }
 
-  function teacherSelected(selectRoot) {
-    const input = selectRoot.matches?.('input') ? selectRoot : selectRoot.querySelector('input');
-    const value = String(input?.value || textOf(selectRoot) || '').trim();
-    return value && !value.includes('请选择');
+  function forceInputDisplay(selectRoot, label) {
+    const box = selectRoot.closest?.('.el-select') || selectRoot;
+    const input = box.querySelector('input') || (box.matches?.('input') ? box : null);
+    if (!input) return;
+    input.removeAttribute('readonly');
+    setNativeValue(input, label);
+    input.setAttribute('readonly', 'readonly');
+  }
+
+  function forceVueSelect(selectRoot, optionVm, labelFromDom = '') {
+    const selectVm = getSelectVm(selectRoot);
+    const label = String(optionVm?.currentLabel || optionVm?.label || optionVm?.value || labelFromDom || '').trim();
+    if (!selectVm || !optionVm) {
+      if (label) forceInputDisplay(selectRoot, label);
+      return false;
+    }
+
+    try {
+      if (typeof selectVm.handleOptionSelect === 'function') {
+        selectVm.handleOptionSelect(optionVm, true);
+      }
+      selectVm.$emit?.('input', optionVm.value);
+      if (typeof selectVm.emitChange === 'function') selectVm.emitChange(optionVm.value);
+      selectVm.visible = false;
+      selectVm.selectedLabel = label;
+      selectVm.query = '';
+      selectVm.hoverIndex = -1;
+      selectVm.$forceUpdate?.();
+      forceInputDisplay(selectRoot, label);
+      return true;
+    } catch (err) {
+      console.warn('forceVueSelect failed', err);
+      if (label) forceInputDisplay(selectRoot, label);
+      return false;
+    }
+  }
+
+  function findOptionVmByDomText(selectRoot, optionEl) {
+    const selectVm = getSelectVm(selectRoot);
+    const label = normalizeText(textOf(optionEl));
+    return getVmOptions(selectVm).find(option => normalizeText(option.currentLabel || option.label || option.value) === label) || null;
   }
 
   async function openTeacherDropdown(selectRoot) {
     const selectBox = selectRoot.closest?.('.el-select') || selectRoot;
     const input = selectBox.querySelector('input') || selectRoot;
+    const selectVm = getSelectVm(selectBox);
 
     // 必须先 DOM 点击“请选择”这个框本身，再等下拉出现。
     for (const target of [input, selectBox]) {
       if (!target) continue;
       clickAtElementCenter(target);
       clickEl(target);
+      if (selectVm) {
+        selectVm.visible = true;
+        selectVm.$forceUpdate?.();
+      }
       await sleep(speedValue('radio'));
-      if (getVisibleTeacherOptions().length) return true;
+      if (getVisibleTeacherOptions().length || getVmOptions(selectVm).length) return true;
     }
-    return getVisibleTeacherOptions().length > 0;
+    return getVisibleTeacherOptions().length > 0 || getVmOptions(selectVm).length > 0;
   }
 
-  async function chooseTeacherOption(option, selectRoot) {
-    const name = textOf(option);
-    log('点击老师选项：' + name);
+  async function chooseTeacherOption(optionEl, selectRoot) {
+    const domName = textOf(optionEl);
+    log('点击老师选项：' + domName);
 
-    // 先像真人一样点下拉出来的老师名字中心点。
-    clickAtElementCenter(option);
+    // 1. 先真正点击下拉出来的老师名字中心点。
+    clickAtElementCenter(optionEl);
     await sleep(speedValue('radio'));
     if (teacherSelected(selectRoot)) return true;
 
-    // 再补 Element UI / Vue 选择方法。
-    callVueOptionSelect(option);
+    // 2. 再按 DOM 文字找到当前 select 组件里的 option，并强制写入 Vue 表单。
+    const optionVm = findOptionVmByDomText(selectRoot, optionEl);
+    forceVueSelect(selectRoot, optionVm, domName);
     await sleep(speedValue('radio'));
-    if (teacherSelected(selectRoot)) return true;
+    return teacherSelected(selectRoot);
+  }
 
-    // 最后再点一次文字 span。
-    const span = option.querySelector('span') || option;
-    clickAtElementCenter(span);
+  async function chooseTeacherByVm(selectRoot) {
+    const selectVm = getSelectVm(selectRoot);
+    const options = getVmOptions(selectVm);
+    if (!options.length) return false;
+    const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
+    const label = String(option.currentLabel || option.label || option.value || '').trim();
+    log('强制选择老师：' + label);
+    forceVueSelect(selectRoot, option, label);
     await sleep(speedValue('radio'));
     return teacherSelected(selectRoot);
   }
@@ -835,11 +898,12 @@
 
     for (let attempt = 1; attempt <= 5; attempt++) {
       await openTeacherDropdown(selectBox);
-      let options = getVisibleTeacherOptions();
-      if (!options.length) continue;
-
-      const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
-      if (await chooseTeacherOption(option, selectBox)) return true;
+      const options = getVisibleTeacherOptions();
+      if (options.length) {
+        const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
+        if (await chooseTeacherOption(option, selectBox)) return true;
+      }
+      if (await chooseTeacherByVm(selectBox)) return true;
     }
 
     return teacherSelected(selectBox);
