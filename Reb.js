@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.16
+// @version      1.0.17
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -725,30 +725,116 @@
     return true;
   }
 
+  function getVisibleTeacherOptions() {
+    return [...document.querySelectorAll('.el-select-dropdown')]
+      .filter(dropdown => visible(dropdown))
+      .flatMap(dropdown => [...dropdown.querySelectorAll('.el-select-dropdown__item')])
+      .filter(item => visible(item)
+        && !item.classList.contains('is-disabled')
+        && normalizeText(textOf(item)));
+  }
+
+  function dispatchOptionMouse(option, type) {
+    const rect = option.getBoundingClientRect();
+    const x = Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+    const y = Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+    option.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === 'mousedown' ? 1 : 0
+    }));
+  }
+
+  function callVueOptionSelect(option) {
+    // Element UI 的 el-option 选中逻辑在 Vue 组件里；直接调用可避免“下拉打开但点不上”。
+    const nodes = [option, ...option.querySelectorAll('*')];
+    const vms = nodes.map(node => node.__vue__).filter(Boolean);
+    for (const vm of vms) {
+      if (vm.select && typeof vm.select.handleOptionSelect === 'function') {
+        vm.select.handleOptionSelect(vm, true);
+        return true;
+      }
+      let parent = vm.$parent;
+      while (parent) {
+        if (typeof parent.handleOptionSelect === 'function') {
+          parent.handleOptionSelect(vm, true);
+          return true;
+        }
+        parent = parent.$parent;
+      }
+    }
+    return false;
+  }
+
+  function chooseTeacherOption(option) {
+    option.scrollIntoView({ block: 'center', inline: 'center' });
+    const span = option.querySelector('span') || option;
+
+    // 先走 Element UI / Vue 原生选择方法。
+    const vueSelected = callVueOptionSelect(option);
+
+    // 再补完整 DOM 点击链，兼容没有暴露 Vue 实例的情况。
+    for (const target of [option, span]) {
+      for (const type of ['mouseenter', 'mouseover', 'mousedown', 'mouseup', 'click']) {
+        dispatchOptionMouse(target, type);
+      }
+      target.click?.();
+    }
+    return vueSelected;
+  }
+
+  function teacherSelected(selectRoot) {
+    const input = selectRoot.matches?.('input') ? selectRoot : selectRoot.querySelector('input');
+    const value = String(input?.value || textOf(selectRoot) || '').trim();
+    return value && !value.includes('请选择');
+  }
+
   async function selectOneTeacher(selectRoot) {
     const input = selectRoot.matches?.('input') ? selectRoot : selectRoot.querySelector('input');
     const clickTarget = selectRoot.closest?.('.el-select') || selectRoot;
-    clickEl(input || clickTarget);
-    await sleep(speedValue('radio'));
 
-    const options = [...document.querySelectorAll('.el-select-dropdown:not([style*="display: none"]) .el-select-dropdown__item')]
-      .filter(item => visible(item) && !item.classList.contains('is-disabled') && normalizeText(textOf(item)));
-    if (!options.length) {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
-      return false;
+    if (teacherSelected(clickTarget)) return true;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      let options = getVisibleTeacherOptions();
+      if (!options.length) {
+        clickEl(input || clickTarget);
+        await sleep(speedValue('radio'));
+        options = getVisibleTeacherOptions();
+      }
+
+      if (!options.length) {
+        clickEl(clickTarget);
+        await sleep(speedValue('radio'));
+        options = getVisibleTeacherOptions();
+      }
+
+      if (!options.length) continue;
+
+      const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
+      log('选择老师：' + textOf(option));
+      chooseTeacherOption(option);
+      await sleep(speedValue('radio'));
+
+      if (teacherSelected(clickTarget)) return true;
     }
 
-    const option = options.length === 1 ? options[0] : options[randInt(0, options.length - 1)];
-    clickEl(option);
-    await sleep(speedValue('radio'));
-    return true;
+    return teacherSelected(clickTarget);
   }
 
   async function selectAllTeachers() {
     const selects = [...document.querySelectorAll('.el-select')]
-      .filter(el => visible(el) && !el.closest('#followup-auto-panel') && textOf(el).includes('请选择'));
+      .filter(el => visible(el) && !el.closest('#followup-auto-panel'));
     let done = 0;
     for (const select of selects) {
+      if (teacherSelected(select)) {
+        done++;
+        continue;
+      }
       if (await selectOneTeacher(select)) done++;
     }
     log('老师选择完成：' + done + ' 个');
