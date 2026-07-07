@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.20
+// @version      1.0.21
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -12,6 +12,8 @@
 
 (function () {
   'use strict';
+
+  const SCRIPT_VERSION = '1.0.21';
 
   /**********************
    * 可改配置区
@@ -827,10 +829,13 @@
       }
       selectVm.$emit?.('input', optionVm.value);
       if (typeof selectVm.emitChange === 'function') selectVm.emitChange(optionVm.value);
+      // 双保险：部分页面只靠点击/emit 不刷新显示，这里直接同步 Element UI Select 内部值。
+      try { selectVm.value = optionVm.value; } catch (_) {}
       selectVm.visible = false;
       selectVm.selectedLabel = label;
       selectVm.query = '';
       selectVm.hoverIndex = -1;
+      if (typeof selectVm.setSelected === 'function') selectVm.setSelected();
       selectVm.$forceUpdate?.();
       forceInputDisplay(selectRoot, label);
       return true;
@@ -916,17 +921,24 @@
     const selects = [...document.querySelectorAll('.el-select')]
       .filter(el => visible(el)
         && !el.closest('#followup-auto-panel')
-        && (textOf(el).includes('请选择') || el.querySelector('input')));
+        && el.querySelector('input')
+        && (el.querySelector('input')?.placeholder === '请选择' || getVmOptions(getSelectVm(el)).length));
     let done = 0;
+    const values = [];
     for (const select of selects) {
+      if (!teacherSelected(select)) await selectOneTeacher(select);
+      const value = String(select.querySelector('input')?.value || '').trim();
       if (teacherSelected(select)) {
         done++;
-        continue;
+        values.push(value);
+      } else {
+        log('老师选择失败：这个框还是真正空值/请选择');
       }
-      if (await selectOneTeacher(select)) done++;
-      else log('老师选择失败：仍然显示“请选择”');
     }
-    log('老师选择完成：' + done + ' 个');
+    log('老师真实选择完成：' + done + '/' + selects.length + ' 个' + (values.length ? '（' + values.join('、') + '）' : ''));
+    if (done < selects.length) {
+      throw new Error('老师选择未完成：' + done + '/' + selects.length + '，请检查是否还有“请选择”。');
+    }
   }
 
   function selectAllTenScores() {
@@ -1039,6 +1051,7 @@
       </div>
       <div id="followup-auto-panel-body" style="padding:10px 12px;line-height:1.7;">
         <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
+        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（老师选择修正版）</div>
         <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
         <button id="followup-auto-go-course-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #7E57C2;border-radius:6px;background:white;color:#7E57C2;cursor:pointer;font-weight:bold;">前往课中课程服务表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
