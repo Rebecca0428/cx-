@@ -1,7 +1,7 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.19
+// @version      1.0.20
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -797,8 +797,11 @@
   function teacherSelected(selectRoot) {
     const box = selectRoot.closest?.('.el-select') || selectRoot;
     const input = box.querySelector('input') || (box.matches?.('input') ? box : null);
-    const value = String(input?.value || textOf(box) || '').trim();
-    return value && !value.includes('请选择');
+    // Element UI 的下拉选项会藏在 .el-select 的文本里；不能用 textOf(box) 判断，
+    // 否则明明还显示“请选择”，也会被误判为已选中。
+    const value = String(input?.value || '').trim();
+    const placeholder = String(input?.placeholder || '').trim();
+    return !!value && value !== placeholder && !value.includes('请选择');
   }
 
   function forceInputDisplay(selectRoot, label) {
