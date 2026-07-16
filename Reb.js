@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.25
+// @version      1.0.26
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '1.0.25';
+  const SCRIPT_VERSION = '1.0.26';
 
   const SATISFACTION_UPLOAD_IMAGE = {
     filename: '超级学长学员满意度调查表.png',
@@ -1109,13 +1109,73 @@
     log('图片已自动放入上传框：' + done + '/' + inputs.length + ' 个');
     await waitForSatisfactionUploadsDone();
     log('图片上传等待完成');
+    await waitForSatisfactionFileReady();
   }
 
   function buttonIsUsable(el) {
     if (!el || el.closest('#followup-auto-panel')) return false;
     if (el.disabled || el.getAttribute('disabled') !== null || el.classList.contains('is-disabled')) return false;
+    if (el.classList.contains('el-color-dropdown__btn')) return false;
+    const rect = el.getBoundingClientRect();
     const style = getComputedStyle(el);
-    return style.display !== 'none' && style.visibility !== 'hidden';
+    return rect.width > 0
+      && rect.height > 0
+      && style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.opacity !== '0';
+  }
+
+  function getVueComponentFromElement(el, name) {
+    let node = el;
+    while (node) {
+      const vm = node.__vue__;
+      if (vm && (!name || vm.$options?.name === name || vm.$options?._componentTag === name)) return vm;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function findVueComponentByName(name) {
+    const nodes = [document.querySelector('#app'), ...document.querySelectorAll('.app-container, .el-card, button, [class*=app]')].filter(Boolean);
+    const seen = new Set();
+    for (const node of nodes) {
+      let vm = node.__vue__;
+      while (vm && !seen.has(vm)) {
+        seen.add(vm);
+        if (vm.$options?.name === name || vm.$options?._componentTag === name) return vm;
+        vm = vm.$parent;
+      }
+    }
+    return null;
+  }
+
+  function findSatisfactionVueVm(anchor) {
+    return getVueComponentFromElement(anchor, 'EditSatisfaction') || findVueComponentByName('EditSatisfaction');
+  }
+
+  function satisfactionFileReady(vm) {
+    const files = vm?.form?.fileAnn;
+    return Array.isArray(files) && files.length > 0 && files.every(file => file && file.name && file.url && !String(file.url).startsWith('blob:'));
+  }
+
+  async function waitForSatisfactionFileReady(timeoutMs = 25000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const vm = findSatisfactionVueVm();
+      if (satisfactionFileReady(vm)) {
+        log('图片已进入网页表单：' + vm.form.fileAnn.map(file => file.name).join('、'));
+        return true;
+      }
+      const uploading = getUploadListItems().some(item => item.classList.contains('is-uploading') || textOf(item).includes('上传中'))
+        || [...document.querySelectorAll('.el-icon-loading')].some(el => visible(el) && !el.closest('#followup-auto-panel'));
+      const failed = getUploadListItems().find(item => item.classList.contains('is-fail') || textOf(item).includes('失败'));
+      if (failed) throw new Error('图片上传失败，请检查上传控件');
+      if (!uploading && getUploadListItems().length && Date.now() - start > 2500 && !satisfactionFileReady(vm)) {
+        // 有些 Element 上传组件的列表先出现，url 会稍后写回 form.fileAnn，所以继续等，不提前通过。
+      }
+      await sleep(300);
+    }
+    throw new Error('图片已经显示，但网页表单里还没有拿到上传后的 url，不能点击蓝色确定');
   }
 
   function findSubmitLikeButton(root = document) {
@@ -1123,22 +1183,28 @@
     const containsWords = ['确认', '确定', '提交', '保存'];
     const candidates = [...root.querySelectorAll('button, .el-button, [role="button"], a')]
       .filter(buttonIsUsable)
-      .map(el => ({ el, text: normalizeText(textOf(el)), rect: el.getBoundingClientRect() }))
-      .filter(item => item.text && !item.text.includes('取消'));
+      .map(el => ({
+        el,
+        text: normalizeText(textOf(el)),
+        rect: el.getBoundingClientRect(),
+        primary: el.classList.contains('el-button--primary'),
+        loading: el.classList.contains('is-loading')
+      }))
+      .filter(item => item.text && !item.text.includes('取消') && !item.loading);
 
-    // 优先点页面底部/表单底部的蓝色“确定/确认/提交”，即使它在当前可视区域下方一点点也要点。
+    // 满意度页只认真正可见的底部蓝色“确 定”。隐藏弹窗/颜色选择器/右侧面板一律排除。
     const primaryExact = candidates
-      .filter(item => item.el.classList.contains('el-button--primary') && exactWords.includes(item.text))
-      .sort((a, b) => b.rect.top - a.rect.top)[0];
+      .filter(item => item.primary && exactWords.includes(item.text))
+      .sort((a, b) => (b.rect.top - a.rect.top) || (b.rect.left - a.rect.left))[0];
     if (primaryExact) return primaryExact.el;
 
     const exact = candidates
       .filter(item => exactWords.includes(item.text))
-      .sort((a, b) => b.rect.top - a.rect.top)[0];
+      .sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0) || b.rect.top - a.rect.top)[0];
     if (exact) return exact.el;
 
     const primaryContains = candidates
-      .filter(item => item.el.classList.contains('el-button--primary') && containsWords.some(word => item.text.includes(word)))
+      .filter(item => item.primary && containsWords.some(word => item.text.includes(word)))
       .sort((a, b) => b.rect.top - a.rect.top)[0];
     if (primaryContains) return primaryContains.el;
 
@@ -1154,6 +1220,9 @@
       const boxes = [...document.querySelectorAll('.el-message-box, .el-dialog, .el-popover')]
         .filter(el => visible(el) && !el.closest('#followup-auto-panel'));
       for (const box of boxes) {
+        const title = textOf(box);
+        // 网站版本更新提示不要在录入过程中乱点，避免刷新打断流程。
+        if (title.includes('系统版本有更新')) continue;
         const btn = findSubmitLikeButton(box);
         if (btn) {
           log('DOM硬点击弹窗确认：' + textOf(btn));
@@ -1169,38 +1238,98 @@
 
   function nativeClickHard(el) {
     if (!el) return false;
+    el.scrollIntoView?.({ block: 'center', inline: 'center' });
     const rect = el.getBoundingClientRect();
     const x = Math.max(2, Math.min(window.innerWidth - 2, rect.left + rect.width / 2));
     const y = Math.max(2, Math.min(window.innerHeight - 2, rect.top + rect.height / 2));
-    el.focus?.();
-    if (el instanceof HTMLButtonElement) HTMLButtonElement.prototype.click.call(el);
-    else if (el instanceof HTMLElement) HTMLElement.prototype.click.call(el);
-    else el.click?.();
-    el.click?.();
-    for (const type of ['pointerover', 'mouseover', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-      el.dispatchEvent(new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-        button: 0,
-        buttons: type.includes('down') ? 1 : 0
-      }));
+    const realTarget = document.elementFromPoint(x, y)?.closest?.('button, .el-button, [role="button"], a') || el;
+    const targets = [...new Set([realTarget, el].filter(Boolean))];
+    for (const target of targets) {
+      target.focus?.();
+      for (const type of ['pointerover', 'mouseover', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          button: 0,
+          buttons: type.includes('down') ? 1 : 0
+        }));
+      }
+      if (target instanceof HTMLButtonElement) HTMLButtonElement.prototype.click.call(target);
+      else if (target instanceof HTMLElement) HTMLElement.prototype.click.call(target);
+      else target.click?.();
     }
     return true;
   }
 
+  async function waitForSatisfactionSubmitResult(timeoutMs = 50000) {
+    const startHref = location.href;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await sleep(500);
+      const text = textOf(document.body);
+      const formErrors = [...document.querySelectorAll('.el-form-item__error')]
+        .filter(visible)
+        .map(textOf)
+        .filter(Boolean);
+      if (formErrors.length) throw new Error('蓝色确定已触发，但表单校验失败：' + formErrors.join('；'));
+
+      // 真正成功的标准：离开满意度编辑路由，回到课程服务/满意度列表等页面。
+      if (!isSatisfactionEditPage() && location.href !== startHref) {
+        if (text.includes('系统版本有更新')) log('网页提示系统版本更新；提交已成功跳转，稍后可手动点该提示的确定刷新。');
+        return true;
+      }
+
+      const vm = findSatisfactionVueVm();
+      const btn = findSubmitLikeButton(document);
+      const visibleLoadingBtn = [...document.querySelectorAll('button.el-button--primary')]
+        .find(b => visible(b) && normalizeText(textOf(b)) === '确定' && b.classList.contains('is-loading'));
+      const maybeError = [...document.querySelectorAll('.el-message, .el-notification')]
+        .filter(visible)
+        .map(textOf)
+        .find(t => /失败|错误|Network|超时|异常/.test(t));
+      if (maybeError && !vm?.loading && !visibleLoadingBtn) throw new Error('提交失败：' + maybeError);
+      if (!vm?.loading && !visibleLoadingBtn && Date.now() - start > 2500 && !btn && !isSatisfactionEditPage()) return true;
+    }
+
+    const vm = findSatisfactionVueVm();
+    if (vm && vm.loading) vm.loading = false;
+    throw new Error('已经点到蓝色“确定”，但网页长时间没有返回成功；我已取消按钮 loading，请检查网络/代理后重试。');
+  }
+
+  async function submitSatisfactionByVue(btn) {
+    const vm = findSatisfactionVueVm(btn);
+    if (!vm || typeof vm.submit !== 'function') return false;
+    if (!satisfactionFileReady(vm)) await waitForSatisfactionFileReady();
+    if (vm.loading) {
+      vm.loading = false;
+      await sleep(300);
+      log('已取消上一次卡住的确认 loading');
+    }
+    log('调用网页自己的提交函数：EditSatisfaction.submit()');
+    vm.submit();
+    return true;
+  }
+
   async function clickSatisfactionSubmit() {
+    setPanelCollapsed(true);
     window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
     await sleep(500);
     const btn = findSubmitLikeButton(document);
-    if (!btn) throw new Error('没有找到满意度确认/提交按钮');
-    log('DOM硬点击确认/提交：' + textOf(btn));
-    nativeClickHard(btn);
-    await sleep(1000);
-    await clickAnyConfirmDialog();
+    if (!btn) throw new Error('没有找到可见的底部蓝色“确定”按钮');
+    log('锁定底部蓝色确定按钮：' + textOf(btn));
+
+    const usedVueSubmit = await submitSatisfactionByVue(btn);
+    if (!usedVueSubmit) {
+      log('没有拿到网页提交函数，改用硬点击蓝色确定：' + textOf(btn));
+      nativeClickHard(btn);
+      await sleep(1000);
+      await clickAnyConfirmDialog();
+    }
+    await waitForSatisfactionSubmitResult();
   }
 
   async function runSatisfaction() {
@@ -1219,7 +1348,7 @@
       await uploadSatisfactionImages();
       log('步骤6：DOM点击确认/提交');
       await clickSatisfactionSubmit();
-      log('满意度已自动填写、上传图片并确认/提交。');
+      log('满意度已自动填写、上传图片，且网页已确认跳转。');
     } catch (err) {
       console.error(err);
       log('满意度录入停止：' + err.message);
@@ -1306,7 +1435,7 @@
       </div>
       <div id="followup-auto-panel-body" style="padding:10px 12px;line-height:1.7;">
         <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
-        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（确认按钮修正版）</div>
+        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（蓝色确定直提版）</div>
         <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
         <button id="followup-auto-go-course-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #7E57C2;border-radius:6px;background:white;color:#7E57C2;cursor:pointer;font-weight:bold;">前往课中课程服务表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
