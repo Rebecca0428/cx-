@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.24
+// @version      1.0.25
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '1.0.24';
+  const SCRIPT_VERSION = '1.0.25';
 
   const SATISFACTION_UPLOAD_IMAGE = {
     filename: '超级学长学员满意度调查表.png',
@@ -1111,16 +1111,41 @@
     log('图片上传等待完成');
   }
 
+  function buttonIsUsable(el) {
+    if (!el || el.closest('#followup-auto-panel')) return false;
+    if (el.disabled || el.getAttribute('disabled') !== null || el.classList.contains('is-disabled')) return false;
+    const style = getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
   function findSubmitLikeButton(root = document) {
-    const exactWords = ['确认', '确定', '提交', '保存'];
+    const exactWords = ['确认', '确定', '提交'];
+    const containsWords = ['确认', '确定', '提交', '保存'];
     const candidates = [...root.querySelectorAll('button, .el-button, [role="button"], a')]
-      .filter(el => visible(el)
-        && !el.closest('#followup-auto-panel')
-        && !el.disabled
-        && !el.classList.contains('is-disabled'));
-    return candidates.find(el => exactWords.includes(normalizeText(textOf(el))))
-      || candidates.find(el => ['确认', '确定', '提交', '保存'].some(word => normalizeText(textOf(el)).includes(word)))
-      || null;
+      .filter(buttonIsUsable)
+      .map(el => ({ el, text: normalizeText(textOf(el)), rect: el.getBoundingClientRect() }))
+      .filter(item => item.text && !item.text.includes('取消'));
+
+    // 优先点页面底部/表单底部的蓝色“确定/确认/提交”，即使它在当前可视区域下方一点点也要点。
+    const primaryExact = candidates
+      .filter(item => item.el.classList.contains('el-button--primary') && exactWords.includes(item.text))
+      .sort((a, b) => b.rect.top - a.rect.top)[0];
+    if (primaryExact) return primaryExact.el;
+
+    const exact = candidates
+      .filter(item => exactWords.includes(item.text))
+      .sort((a, b) => b.rect.top - a.rect.top)[0];
+    if (exact) return exact.el;
+
+    const primaryContains = candidates
+      .filter(item => item.el.classList.contains('el-button--primary') && containsWords.some(word => item.text.includes(word)))
+      .sort((a, b) => b.rect.top - a.rect.top)[0];
+    if (primaryContains) return primaryContains.el;
+
+    const contains = candidates
+      .filter(item => containsWords.some(word => item.text.includes(word)))
+      .sort((a, b) => b.rect.top - a.rect.top)[0];
+    return contains?.el || null;
   }
 
   async function clickAnyConfirmDialog(timeoutMs = 4000) {
@@ -1131,8 +1156,8 @@
       for (const box of boxes) {
         const btn = findSubmitLikeButton(box);
         if (btn) {
-          log('DOM点击弹窗确认：' + textOf(btn));
-          clickEl(btn, true);
+          log('DOM硬点击弹窗确认：' + textOf(btn));
+          nativeClickHard(btn);
           await sleep(800);
           return true;
         }
@@ -1142,15 +1167,38 @@
     return false;
   }
 
+  function nativeClickHard(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(2, Math.min(window.innerWidth - 2, rect.left + rect.width / 2));
+    const y = Math.max(2, Math.min(window.innerHeight - 2, rect.top + rect.height / 2));
+    el.focus?.();
+    if (el instanceof HTMLButtonElement) HTMLButtonElement.prototype.click.call(el);
+    else if (el instanceof HTMLElement) HTMLElement.prototype.click.call(el);
+    else el.click?.();
+    el.click?.();
+    for (const type of ['pointerover', 'mouseover', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      el.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons: type.includes('down') ? 1 : 0
+      }));
+    }
+    return true;
+  }
+
   async function clickSatisfactionSubmit() {
     window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
     await sleep(500);
     const btn = findSubmitLikeButton(document);
     if (!btn) throw new Error('没有找到满意度确认/提交按钮');
-    btn.scrollIntoView?.({ block: 'center', inline: 'center' });
-    await sleep(200);
-    log('DOM点击确认/提交：' + textOf(btn));
-    clickEl(btn, true);
+    log('DOM硬点击确认/提交：' + textOf(btn));
+    nativeClickHard(btn);
     await sleep(1000);
     await clickAnyConfirmDialog();
   }
@@ -1258,7 +1306,7 @@
       </div>
       <div id="followup-auto-panel-body" style="padding:10px 12px;line-height:1.7;">
         <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
-        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（先打开后上传版）</div>
+        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（确认按钮修正版）</div>
         <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
         <button id="followup-auto-go-course-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #7E57C2;border-radius:6px;background:white;color:#7E57C2;cursor:pointer;font-weight:bold;">前往课中课程服务表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
