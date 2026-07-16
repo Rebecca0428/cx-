@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.21
+// @version      1.0.22
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '1.0.21';
+  const SCRIPT_VERSION = '1.0.22';
 
   /**********************
    * 可改配置区
@@ -52,6 +52,7 @@
 
   const SPEED_STORAGE_KEY = 'followup-auto-speed-mode';
   const TEXT_STORAGE_KEY = 'followup-auto-text-value';
+  const MAX_PER_RUN_STORAGE_KEY = 'followup-auto-max-per-run';
   const PANEL_COLLAPSED_STORAGE_KEY = 'followup-auto-panel-collapsed';
   const SPEED_PRESETS = {
     stable: {
@@ -114,6 +115,46 @@
     const label = document.querySelector('#followup-auto-text-label');
     if (label) label.textContent = next;
     if (!silent) log('已保存填写内容：' + next);
+  }
+
+  function clampMaxPerRun(value) {
+    const n = parseInt(value, 10);
+    if (!Number.isFinite(n)) return CONFIG.maxPerRun;
+    return Math.max(1, Math.min(50, n));
+  }
+
+  function getMaxPerRun() {
+    const saved = localStorage.getItem(MAX_PER_RUN_STORAGE_KEY);
+    return clampMaxPerRun(saved || CONFIG.maxPerRun);
+  }
+
+  function refreshMaxPerRunPanel() {
+    const input = document.querySelector('#followup-auto-max-per-run');
+    const label = document.querySelector('#followup-auto-max-label');
+    const value = getMaxPerRun();
+    if (input && document.activeElement !== input && input.value !== String(value)) input.value = String(value);
+    if (label) label.textContent = String(value);
+  }
+
+  function setMaxPerRun(value, silent = false) {
+    const next = clampMaxPerRun(value);
+    localStorage.setItem(MAX_PER_RUN_STORAGE_KEY, String(next));
+    refreshMaxPerRunPanel();
+    refreshPageStatusPanel();
+    if (!silent) log('已保存本次填写条数：' + next + ' 条');
+    return next;
+  }
+
+  function saveMaxPerRunInputNow(silent = true) {
+    const input = document.querySelector('#followup-auto-max-per-run');
+    if (!input) return getMaxPerRun();
+    const next = clampMaxPerRun(input.value);
+    localStorage.setItem(MAX_PER_RUN_STORAGE_KEY, String(next));
+    const label = document.querySelector('#followup-auto-max-label');
+    if (label) label.textContent = String(next);
+    refreshPageStatusPanel();
+    if (!silent) log('已保存本次填写条数：' + next + ' 条');
+    return next;
   }
 
   function detectStudentName(item, dialog) {
@@ -195,7 +236,7 @@
     if (courseBtn) courseBtn.style.display = mode === 'satisfaction' ? 'none' : 'block';
     if (startBtn) {
       startBtn.textContent = mode === 'followup'
-        ? '开始处理回访当前页'
+        ? '开始处理回访当前页（' + getMaxPerRun() + '条）'
         : mode === 'satisfaction'
           ? '开始录入满意度（不提交）'
           : '请先前往目标页面';
@@ -994,7 +1035,9 @@
 
     try {
       let done = 0;
-      for (let i = 0; i < CONFIG.maxPerRun; i++) {
+      const limit = getMaxPerRun();
+      log('本次最多自动填写：' + limit + ' 条');
+      for (let i = 0; i < limit; i++) {
         const rows = getPendingRows();
         if (!rows.length) {
           log('当前页没有找到待处理记录。');
@@ -1005,7 +1048,7 @@
         done++;
         await sleep(speedValue('afterRow'));
       }
-      log(`本次完成 ${done} 条。`);
+      log(`本次完成 ${done}/${limit} 条。`);
     } catch (err) {
       console.error(err);
       log(`停止：${err.message}`);
@@ -1021,6 +1064,7 @@
       refreshPageStatusPanel();
       refreshTextPanel();
       refreshSpeedPanel();
+      refreshMaxPerRunPanel();
       refreshPanelCollapse();
       return;
     }
@@ -1051,11 +1095,19 @@
       </div>
       <div id="followup-auto-panel-body" style="padding:10px 12px;line-height:1.7;">
         <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
-        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（老师选择修正版）</div>
+        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（条数可调版）</div>
         <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
         <button id="followup-auto-go-course-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #7E57C2;border-radius:6px;background:white;color:#7E57C2;cursor:pointer;font-weight:bold;">前往课中课程服务表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
         <div>时间：${pad(CONFIG.startHour)}:00-${pad(CONFIG.endHour)}:00，结束晚 ${CONFIG.minDurationMinutes}-${CONFIG.maxDurationMinutes} 分钟</div>
+        <div style="margin-top:6px;padding:6px;border:1px solid #e5e7eb;border-radius:6px;background:#f8fbff;">
+          <div style="font-weight:bold;color:#409EFF;">本次填写条数：<span id="followup-auto-max-label"></span> 条</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+            <input id="followup-auto-max-per-run" type="number" min="1" max="50" step="1" style="flex:1;height:28px;box-sizing:border-box;border:1px solid #dcdfe6;border-radius:6px;padding:0 8px;" />
+            <button id="followup-auto-max-save" style="width:78px;height:28px;border:1px solid #409EFF;border-radius:6px;background:white;color:#409EFF;cursor:pointer;font-weight:bold;">保存条数</button>
+          </div>
+          <div style="font-size:12px;color:#909399;line-height:1.4;">范围 1-50；只影响学管沟通回访表，满意度仍然填完后不提交。</div>
+        </div>
         <div>内容：<span id="followup-auto-text-label"></span></div>
         <input id="followup-auto-text-value" placeholder="例如：学生上课认真，态度端正" style="margin-top:6px;width:100%;height:30px;box-sizing:border-box;border:1px solid #dcdfe6;border-radius:6px;padding:0 8px;" />
         <div style="font-size:12px;color:#909399;line-height:1.4;">写“学生”或 {学生}，都会自动替换为当前处理学生姓名</div>
@@ -1075,6 +1127,21 @@
     document.querySelector('#followup-auto-collapse-toggle').addEventListener('click', () => setPanelCollapsed(!getPanelCollapsed()));
     document.querySelector('#followup-auto-go-page').addEventListener('click', goFollowupPage);
     document.querySelector('#followup-auto-go-course-page').addEventListener('click', goCourseServicePage);
+    document.querySelector('#followup-auto-max-save').addEventListener('click', () => {
+      setMaxPerRun(document.querySelector('#followup-auto-max-per-run').value);
+    });
+    document.querySelector('#followup-auto-max-per-run').addEventListener('input', () => {
+      saveMaxPerRunInputNow(true);
+    });
+    document.querySelector('#followup-auto-max-per-run').addEventListener('blur', event => {
+      event.target.value = String(setMaxPerRun(event.target.value, true));
+    });
+    document.querySelector('#followup-auto-max-per-run').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        event.target.value = String(setMaxPerRun(event.target.value));
+      }
+    });
     document.querySelector('#followup-auto-text-save').addEventListener('click', () => {
       setTextValue(document.querySelector('#followup-auto-text-value').value);
     });
@@ -1097,6 +1164,7 @@
     });
     refreshTextPanel();
     refreshSpeedPanel();
+    refreshMaxPerRunPanel();
     refreshPageStatusPanel();
     refreshPanelCollapse();
   }
@@ -1105,6 +1173,7 @@
   setInterval(() => {
     installPanel();
     refreshPageStatusPanel();
+    refreshMaxPerRunPanel();
     refreshPanelCollapse();
   }, 1000);
 })();
