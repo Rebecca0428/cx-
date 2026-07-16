@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         超级学长-学管沟通回访自动填写
 // @namespace    local.crm.followup
-// @version      1.0.23
+// @version      1.0.24
 // @updateURL    https://raw.githubusercontent.com/Rebecca0428/cx-/main/Reb.user.js
 // @downloadURL  https://github.com/Rebecca0428/cx-/raw/main/Reb.user.js
 // @description  自动处理学管沟通回访表：随机近5天日期、10:00-20:00随机时间、统一填写学习情况沟通、反馈正常并提交。
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '1.0.23';
+  const SCRIPT_VERSION = '1.0.24';
 
   const SATISFACTION_UPLOAD_IMAGE = {
     filename: '超级学长学员满意度调查表.png',
@@ -197,8 +197,13 @@
   }
 
   function isSatisfactionEditPage() {
+    // 不能只看“编辑满意度调查”文字：列表页顶部历史标签也会出现这个字，导致误判为已打开。
+    const hash = location.hash || '';
+    const href = location.href || '';
     const t = textOf(document.body);
-    return t.includes('录入学生满意度调查') || t.includes('编辑满意度调查');
+    return hash.includes('/operation/EditSatisfaction/EditSatisfaction')
+      || href.includes('/operation/EditSatisfaction/EditSatisfaction')
+      || t.includes('录入学生满意度调查');
   }
 
   function goFollowupPage() {
@@ -1048,18 +1053,54 @@
     throw new Error('等待图片上传完成超时');
   }
 
+  function findUploadArea() {
+    const uploadTexts = ['将文件拖到此处', '点击上传', '上传'];
+    const boxes = [...document.querySelectorAll('.el-upload, .el-upload-dragger, .el-form-item, .upload, [class*=upload], input[type="file"]')]
+      .filter(el => !el.closest('#followup-auto-panel'));
+    return boxes.find(el => el.matches?.('input[type="file"]') || uploadTexts.some(word => textOf(el).includes(word))) || null;
+  }
+
+  async function scrollToSatisfactionUploadArea(timeoutMs = 10000) {
+    log('前面步骤完成，开始查找图片上传框');
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const inputs = getUploadInputs();
+      const area = findUploadArea();
+      if (inputs.length || area) {
+        (area || inputs[0]).scrollIntoView?.({ block: 'center', inline: 'center' });
+        await sleep(500);
+        return true;
+      }
+      window.scrollBy(0, Math.max(400, Math.floor(window.innerHeight * 0.85)));
+      await sleep(300);
+    }
+    window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+    await sleep(800);
+    return !!getUploadInputs().length || !!findUploadArea();
+  }
+
   async function uploadSatisfactionImages() {
-    const inputs = getUploadInputs();
+    await scrollToSatisfactionUploadArea();
+    let inputs = getUploadInputs();
     if (!inputs.length) {
-      throw new Error('没有找到图片上传框，请确认当前满意度页面是否有上传控件');
+      const area = findUploadArea();
+      if (area) {
+        clickEl(area, true);
+        await sleep(500);
+        inputs = getUploadInputs();
+      }
+    }
+    if (!inputs.length) {
+      throw new Error('没有找到图片上传框，请确认是否已滚动到“将文件拖到此处，或点击上传”区域');
     }
     const file = createSatisfactionUploadFile();
     let done = 0;
     for (const input of inputs) {
       try {
+        input.scrollIntoView?.({ block: 'center', inline: 'center' });
         setFileInputFiles(input, file);
         done++;
-        await sleep(300);
+        await sleep(500);
       } catch (err) {
         console.warn('上传框写入失败', err);
       }
@@ -1102,8 +1143,12 @@
   }
 
   async function clickSatisfactionSubmit() {
+    window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+    await sleep(500);
     const btn = findSubmitLikeButton(document);
     if (!btn) throw new Error('没有找到满意度确认/提交按钮');
+    btn.scrollIntoView?.({ block: 'center', inline: 'center' });
+    await sleep(200);
     log('DOM点击确认/提交：' + textOf(btn));
     clickEl(btn, true);
     await sleep(1000);
@@ -1114,11 +1159,17 @@
     const startBtn = document.querySelector('#followup-auto-start');
     if (startBtn) startBtn.disabled = true;
     try {
+      log('步骤1：先打开满意度录入页面');
       await openSatisfactionEntryIfNeeded();
+      log('步骤2：选择老师');
       await selectAllTeachers();
+      log('步骤3：选择全部10分');
       selectAllTenScores();
+      log('步骤4：备注填写“无”');
       fillAllSatisfactionTextareas();
+      log('步骤5：最后查找上传框并上传图片');
       await uploadSatisfactionImages();
+      log('步骤6：DOM点击确认/提交');
       await clickSatisfactionSubmit();
       log('满意度已自动填写、上传图片并确认/提交。');
     } catch (err) {
@@ -1207,7 +1258,7 @@
       </div>
       <div id="followup-auto-panel-body" style="padding:10px 12px;line-height:1.7;">
         <div id="followup-auto-page-status" style="font-weight:bold;color:#409EFF;"></div>
-        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（满意度自动上传版）</div>
+        <div style="font-size:12px;color:#67C23A;font-weight:bold;">脚本版本：${SCRIPT_VERSION}（先打开后上传版）</div>
         <button id="followup-auto-go-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #E6A23C;border-radius:6px;background:white;color:#E6A23C;cursor:pointer;font-weight:bold;">前往学管沟通回访表</button>
         <button id="followup-auto-go-course-page" style="margin:6px 0;width:100%;height:30px;border:1px solid #7E57C2;border-radius:6px;background:white;color:#7E57C2;cursor:pointer;font-weight:bold;">前往课中课程服务表</button>
         <div>日期：今天往前 ${CONFIG.randomDateBackDays} 天内随机</div>
